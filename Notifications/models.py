@@ -39,6 +39,10 @@ class Notifications(models.Model):
 
     def __str__(self):
         return f"{self.user.email} | {self.package_name} | {self.title}"
+    
+    class Meta:
+        verbose_name = "Notification"
+        verbose_name_plural = "Notifications"
 
 class NotificationMessage(models.Model):
     """
