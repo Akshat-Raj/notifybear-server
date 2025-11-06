@@ -17,7 +17,7 @@ class Notifications(models.Model):
     info_text = models.CharField(max_length=500, null=True, blank=True)
 
     # Multi-line text notifications (e.g., Gmail summary style)
-    text_lines = models.JSONField(null=True, blank=True)
+    text_lines = models.TextField(null=True, blank=True)
 
     # Optional image information — store encoded or URLs
     large_icon_base64 = models.TextField(null=True, blank=True)
@@ -25,7 +25,7 @@ class Notifications(models.Model):
 
     # Conversation / group chat info
     conversation_title = models.CharField(max_length=500, null=True, blank=True)
-    people = models.JSONField(null=True, blank=True)  # array of contact names / IDs
+    people = models.TextField(null=True, blank=True)  # array of contact names / IDs
 
     created_at = models.DateTimeField(auto_now_add=True)
     
