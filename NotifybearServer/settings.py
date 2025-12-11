@@ -76,8 +76,12 @@ SIMPLE_JWT = {
 }
 CACHES = {
     "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "unique-notifybear-cache",
+        "BACKEND": "django.core.cache.backends.db.DatabaseCache",
+        "LOCATION": "notifybear_cache_table",
+        "TIMEOUT": None,
+        "OPTIONS": {
+            "MAX_ENTRIES": 50000
+        }
     }
 }
 
