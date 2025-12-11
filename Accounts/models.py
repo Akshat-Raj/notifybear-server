@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import Q
 
 class User(AbstractUser):
+    email = models.EmailField(unique=True)
     
     def __str__(self):
         return f"{self.username}"
