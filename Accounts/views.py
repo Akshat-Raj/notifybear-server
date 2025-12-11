@@ -138,3 +138,48 @@ def me(request):
     user = request.user
     serializer = UserSerializer(user)
     return Response(serializer.data)
+
+from google.oauth2 import id_token
+from google.auth.transport import requests
+class GoogleLoginView(APIView):
+    permission_classes = []
+
+    def post(self, request):
+        token = request.data.get("id_token")
+
+        if not token:
+            return Response({"error": "Missing id_token"}, status=400)
+
+        try:
+            # Validate token with Google
+            payload = id_token.verify_oauth2_token(
+                token,
+                requests.Request(),
+                "<YOUR_GOOGLE_WEB_CLIENT_ID>"
+            )
+        except Exception:
+            return Response({"error": "Invalid Google token"}, status=400)
+
+        # Extract user info
+        email = payload["email"]
+        first = payload.get("given_name", "")
+        last = payload.get("family_name", "")
+
+        # Create or get user
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                "username": email.split("@")[0],
+                "first_name": first,
+                "last_name": last
+            }
+        )
+
+        # Issue our JWT tokens
+        refresh = RefreshToken.for_user(user)
+
+        return Response({
+            "refresh": str(refresh),
+            "access": str(refresh.access_token),
+            "user": UserSerializer(user).data
+        })
