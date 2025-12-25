@@ -1,6 +1,10 @@
 from django.contrib import admin
+from django.utils.html import format_html
+from django.urls import reverse
+from django.db.models import Count
 from .models import (
-    Notifications,
+    NotificationEvent,
+    UserNotificationState,
     NotificationMessage,
     App,
     InteractionEvent,
@@ -8,76 +12,430 @@ from .models import (
 )
 
 
+# -------------------------
+# Inline Admin Classes
+# -------------------------
+
 class NotificationMessageInline(admin.TabularInline):
     model = NotificationMessage
     extra = 0
     fields = ("sender", "message_text", "message_time")
     readonly_fields = ("sender", "message_text", "message_time")
+    can_delete = False
 
 
-@admin.register(Notifications)
-class NotificationsAdmin(admin.ModelAdmin):
-    list_display = (
-        "id",
-        "user",
-        "package_name",
-        "title",
-        "post_time",
-        "timestamp_opened",
-        "reaction_time",
-    )
-    list_filter = ("package_name", "post_time", "timestamp_opened")
-    search_fields = ("user__email", "title", "text", "package_name")
-    readonly_fields = ("reaction_time", "created_at", "post_time")
-    inlines = [NotificationMessageInline]
-
-    fieldsets = (
-        ("User & Source", {
-            "fields": ("user", "package_name", "channel_id", "notif_key")
-        }),
-        ("Timestamps", {
-            "fields": ("post_time", "timestamp_opened", "timestamp_dismissed", "reaction_time", "created_at")
-        }),
-        ("Text Content", {
-            "fields": (
-                "title", "text", "big_text", "sub_text", "summary_text", "info_text", "text_lines"
-            )
-        }),
-        ("Images", {
-            "fields": ("large_icon_base64", "picture_base64")
-        }),
-        ("Conversation / Group Info", {
-            "fields": ("conversation_title", "people")
-        }),
-    )
+class UserNotificationStateInline(admin.TabularInline):
+    """Show user states for a notification event."""
+    model = UserNotificationState
+    extra = 0
+    fields = ("user", "is_read", "opened_at", "dismissed_at", "ml_score")
+    readonly_fields = ("user", "opened_at", "dismissed_at")
+    can_delete = True
 
 
-@admin.register(NotificationMessage)
-class NotificationMessageAdmin(admin.ModelAdmin):
-    list_display = ("id", "notification", "sender", "message_text", "message_time")
-    search_fields = ("sender", "message_text")
-    list_filter = ("message_time",)
+class InteractionEventInline(admin.TabularInline):
+    """Show interaction events for a notification."""
+    model = InteractionEvent
+    extra = 0
+    fields = ("user", "interaction_type", "timestamp", "raw_reason")
+    readonly_fields = ("user", "interaction_type", "timestamp", "raw_reason", "created_at")
+    can_delete = False
 
+
+# -------------------------
+# App Admin
+# -------------------------
 
 @admin.register(App)
 class AppAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "app_label", "package_name", "first_seen")
-    search_fields = ("app_label", "package_name", "user__email")
-    list_filter = ("first_seen",)
-    readonly_fields = ("first_seen",)
+    list_display = (
+        "id",
+        "user",
+        "app_label",
+        "package_name",
+        "notification_count",
+        "first_seen",
+        "last_seen"
+    )
+    list_filter = ("first_seen", "last_seen", "user")
+    search_fields = ("app_label", "package_name", "user__email", "user__username")
+    readonly_fields = ("first_seen", "last_seen", "notification_count", "total_interactions")
+    
+    fieldsets = (
+        ("App Information", {
+            "fields": ("user", "package_name", "app_label", "icon_reference")
+        }),
+        ("Timestamps", {
+            "fields": ("first_seen", "last_seen")
+        }),
+        ("Statistics", {
+            "fields": ("notification_count", "total_interactions"),
+            "classes": ("collapse",)
+        }),
+    )
+    
+    def notification_count(self, obj):
+        """Count of notifications from this app."""
+        count = obj.notification_events.count()
+        url = reverse("admin:notifications_notificationevent_changelist") + f"?app__id__exact={obj.id}"
+        return format_html('<a href="{}">{} notifications</a>', url, count)
+    notification_count.short_description = "Notifications"
+    
+    def total_interactions(self, obj):
+        """Count of interactions for this app."""
+        count = obj.notification_events.aggregate(
+            total=Count('interaction_events')
+        )['total'] or 0
+        return f"{count} interactions"
+    total_interactions.short_description = "Total Interactions"
 
+
+# -------------------------
+# NotificationEvent Admin (Immutable)
+# -------------------------
+
+@admin.register(NotificationEvent)
+class NotificationEventAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "app_link",
+        "user_email",
+        "notif_key_short",
+        "title",
+        "post_time",
+        "user_count",
+        "interaction_count",
+        "created_at"
+    )
+    list_filter = ("post_time", "created_at", "app__package_name", "app__user")
+    search_fields = (
+        "title",
+        "text",
+        "notif_key",
+        "app__package_name",
+        "app__app_label",
+        "app__user__email"
+    )
+    readonly_fields = (
+        "id",
+        "app",
+        "notif_key",
+        "post_time",
+        "created_at",
+        "content_hash",
+        "user_count",
+        "interaction_count"
+    )
+    inlines = [NotificationMessageInline, UserNotificationStateInline, InteractionEventInline]
+    
+    fieldsets = (
+        ("Source & Identity", {
+            "fields": ("app", "notif_key", "channel_id", "content_hash")
+        }),
+        ("Timestamps", {
+            "fields": ("post_time", "created_at")
+        }),
+        ("Text Content", {
+            "fields": (
+                "title", "text", "big_text", "sub_text", 
+                "summary_text", "info_text", "text_lines"
+            )
+        }),
+        ("Images", {
+            "fields": ("large_icon_base64", "picture_base64"),
+            "classes": ("collapse",)
+        }),
+        ("Conversation Metadata", {
+            "fields": ("conversation_title", "people"),
+            "classes": ("collapse",)
+        }),
+        ("Statistics", {
+            "fields": ("user_count", "interaction_count"),
+            "classes": ("collapse",)
+        }),
+    )
+    
+    def has_change_permission(self, request, obj=None):
+        """
+        Prevent editing immutable notification events.
+        Only allow viewing.
+        """
+        if obj:  # Editing existing object
+            return False
+        return True  # Allow creation (though unlikely via admin)
+    
+    def app_link(self, obj):
+        """Link to the app admin page."""
+        url = reverse("admin:notifications_app_change", args=[obj.app.id])
+        return format_html('<a href="{}">{}</a>', url, obj.app.app_label or obj.app.package_name)
+    app_link.short_description = "App"
+    
+    def user_email(self, obj):
+        """Get user email through app relationship."""
+        return obj.app.user.email if hasattr(obj.app.user, 'email') else str(obj.app.user)
+    user_email.short_description = "User"
+    
+    def notif_key_short(self, obj):
+        """Truncated notification key."""
+        if obj.notif_key and len(obj.notif_key) > 30:
+            return f"{obj.notif_key[:30]}..."
+        return obj.notif_key or "—"
+    notif_key_short.short_description = "Notif Key"
+    
+    def user_count(self, obj):
+        """Number of users who received this notification."""
+        count = obj.user_states.count()
+        return f"{count} user(s)"
+    user_count.short_description = "Seen By"
+    
+    def interaction_count(self, obj):
+        """Number of interactions with this notification."""
+        count = obj.interaction_events.count()
+        return f"{count} interaction(s)"
+    interaction_count.short_description = "Interactions"
+
+
+# -------------------------
+# UserNotificationState Admin (Mutable)
+# -------------------------
+
+@admin.register(UserNotificationState)
+class UserNotificationStateAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "user_link",
+        "notification_link",
+        "app_name",
+        "is_read",
+        "opened_at",
+        "dismissed_at",
+        "ml_score",
+        "reaction_time_display"
+    )
+    list_filter = (
+        "is_read",
+        "opened_at",
+        "dismissed_at",
+        "notification_event__app__package_name",
+        "user"
+    )
+    search_fields = (
+        "user__email",
+        "user__username",
+        "notification_event__title",
+        "notification_event__text",
+        "notification_event__notif_key"
+    )
+    readonly_fields = (
+        "user",
+        "notification_event",
+        "created_at",
+        "last_updated",
+        "reaction_time_display"
+    )
+    
+    fieldsets = (
+        ("Identity", {
+            "fields": ("user", "notification_event")
+        }),
+        ("User State", {
+            "fields": ("is_read", "opened_at", "dismissed_at", "snoozed_until")
+        }),
+        ("ML & Scoring", {
+            "fields": ("ml_score",)
+        }),
+        ("Metadata", {
+            "fields": ("created_at", "last_updated", "reaction_time_display"),
+            "classes": ("collapse",)
+        }),
+    )
+    
+    def user_link(self, obj):
+        """Link to user admin page."""
+        url = reverse("admin:auth_user_change", args=[obj.user.id])
+        return format_html('<a href="{}">{}</a>', url, obj.user.email or obj.user.username)
+    user_link.short_description = "User"
+    
+    def notification_link(self, obj):
+        """Link to notification event admin page."""
+        url = reverse("admin:notifications_notificationevent_change", args=[obj.notification_event.id])
+        title = obj.notification_event.title or "No title"
+        if len(title) > 40:
+            title = f"{title[:40]}..."
+        return format_html('<a href="{}">{}</a>', url, title)
+    notification_link.short_description = "Notification"
+    
+    def app_name(self, obj):
+        """Display app name."""
+        return obj.notification_event.app.app_label or obj.notification_event.app.package_name
+    app_name.short_description = "App"
+    
+    def reaction_time_display(self, obj):
+        """Display reaction time in human-readable format."""
+        rt = obj.reaction_time
+        if rt:
+            seconds = rt.total_seconds()
+            if seconds < 60:
+                return f"{seconds:.1f}s"
+            elif seconds < 3600:
+                return f"{seconds/60:.1f}m"
+            else:
+                return f"{seconds/3600:.1f}h"
+        return "—"
+    reaction_time_display.short_description = "Reaction Time"
+
+
+# -------------------------
+# NotificationMessage Admin
+# -------------------------
+
+@admin.register(NotificationMessage)
+class NotificationMessageAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "notification_event",
+        "sender",
+        "message_preview",
+        "message_time"
+    )
+    list_filter = ("message_time",)
+    search_fields = ("sender", "message_text", "notification_event__title")
+    readonly_fields = ("notification_event", "sender", "message_text", "message_time")
+    
+    def message_preview(self, obj):
+        """Show truncated message text."""
+        if obj.message_text and len(obj.message_text) > 50:
+            return f"{obj.message_text[:50]}..."
+        return obj.message_text or "—"
+    message_preview.short_description = "Message"
+
+
+# -------------------------
+# InteractionEvent Admin (Append-only)
+# -------------------------
 
 @admin.register(InteractionEvent)
 class InteractionEventAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "app", "interaction_type", "removed_at", "raw_reason", "created_at")
-    search_fields = ("notif_key", "user__email", "app__package_name")
-    list_filter = ("interaction_type", "removed_at")
-    readonly_fields = ("created_at",)
+    list_display = (
+        "id",
+        "user_link",
+        "app_name",
+        "interaction_type",
+        "timestamp",
+        "raw_reason",
+        "created_at"
+    )
+    list_filter = ("interaction_type", "timestamp", "notification_event__app__package_name")
+    search_fields = (
+        "user__email",
+        "user__username",
+        "notification_event__title",
+        "notification_event__notif_key"
+    )
+    readonly_fields = (
+        "user",
+        "notification_event",
+        "interaction_type",
+        "timestamp",
+        "raw_reason",
+        "metadata",
+        "created_at"
+    )
+    
+    fieldsets = (
+        ("Identity", {
+            "fields": ("user", "notification_event")
+        }),
+        ("Interaction Details", {
+            "fields": ("interaction_type", "timestamp", "raw_reason", "metadata")
+        }),
+        ("Metadata", {
+            "fields": ("created_at",)
+        }),
+    )
+    
+    def has_change_permission(self, request, obj=None):
+        """
+        Prevent editing append-only interaction events.
+        Only allow viewing.
+        """
+        return False
+    
+    def has_delete_permission(self, request, obj=None):
+        """
+        Prevent deleting interaction events (append-only).
+        """
+        return request.user.is_superuser  # Only superusers can delete
+    
+    def user_link(self, obj):
+        """Link to user admin page."""
+        url = reverse("admin:auth_user_change", args=[obj.user.id])
+        return format_html('<a href="{}">{}</a>', url, obj.user.email or obj.user.username)
+    user_link.short_description = "User"
+    
+    def app_name(self, obj):
+        """Display app name."""
+        return obj.notification_event.app.app_label or obj.notification_event.app.package_name
+    app_name.short_description = "App"
 
+
+# -------------------------
+# DailyAggregate Admin
+# -------------------------
 
 @admin.register(DailyAggregate)
 class DailyAggregateAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "app", "day", "posts", "clicks", "swipes")
-    search_fields = ("app__package_name", "user__email")
-    list_filter = ("day",)
-    readonly_fields = ("day", "posts", "clicks", "swipes")
+    list_display = (
+        "id",
+        "user_link",
+        "app_link",
+        "day",
+        "posts",
+        "clicks",
+        "swipes",
+        "open_rate_display",
+        "last_updated"
+    )
+    list_filter = ("day", "user", "app__package_name")
+    search_fields = ("app__package_name", "app__app_label", "user__email")
+    readonly_fields = ("last_updated", "open_rate_display")
+    
+    fieldsets = (
+        ("Identity", {
+            "fields": ("user", "app", "day")
+        }),
+        ("Metrics", {
+            "fields": ("posts", "clicks", "swipes", "open_rate", "open_rate_display")
+        }),
+        ("Metadata", {
+            "fields": ("last_updated",)
+        }),
+    )
+    
+    def user_link(self, obj):
+        """Link to user admin page."""
+        url = reverse("admin:auth_user_change", args=[obj.user.id])
+        return format_html('<a href="{}">{}</a>', url, obj.user.email or obj.user.username)
+    user_link.short_description = "User"
+    
+    def app_link(self, obj):
+        """Link to app admin page."""
+        url = reverse("admin:notifications_app_change", args=[obj.app.id])
+        return format_html('<a href="{}">{}</a>', url, obj.app.app_label or obj.app.package_name)
+    app_link.short_description = "App"
+    
+    def open_rate_display(self, obj):
+        """Display open rate as percentage."""
+        if obj.open_rate is not None:
+            return f"{obj.open_rate * 100:.1f}%"
+        return "—"
+    open_rate_display.short_description = "Open Rate"
+
+
+# -------------------------
+# Customize Admin Site
+# -------------------------
+
+admin.site.site_header = "NotifyBear Admin"
+admin.site.site_title = "NotifyBear"
+admin.site.index_title = "Notification Intelligence System"

@@ -1,20 +1,22 @@
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.utils import timezone
 from datetime import timedelta
-from django.db.models import Sum
+from django.db.models import Sum, Prefetch
 
 from .models import (
-    Notifications,
+    NotificationEvent,
+    UserNotificationState,
     App,
     InteractionEvent,
     DailyAggregate,
 )
 
 from .serializers import (
-    NotificationsSerializer,
+    UserNotificationStateSerializer,
+    NotificationEventSerializer,
     IngestNotificationSerializer,
     IngestInteractionSerializer,
     AppSerializer,
@@ -22,27 +24,8 @@ from .serializers import (
 )
 
 
-
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
-def get_user_notifications(request):
-    notifications = Notifications.objects.filter(user=request.user).order_by("-post_time")
-    serializer = NotificationsSerializer(notifications, many=True)
-    return Response(serializer.data)
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def upload_notification(request):
-    serializer = NotificationsSerializer(data=request.data)
-    if serializer.is_valid():
-        serializer.save(user=request.user)
-        return Response({"status": "success"})
-    return Response(serializer.errors, status=400)
-
-
 # -------------------------
-# NEW: Helper (internal)
+# Helper function (internal)
 # -------------------------
 
 def _get_or_create_app(user, package_name, app_label=""):
@@ -53,7 +36,7 @@ def _get_or_create_app(user, package_name, app_label=""):
         defaults={"app_label": app_label or package_name}
     )
 
-    # Update readable label if provided
+    # Update readable label if provided and different
     if app_label and app.app_label != app_label:
         app.app_label = app_label
         app.save(update_fields=["app_label"])
@@ -62,7 +45,68 @@ def _get_or_create_app(user, package_name, app_label=""):
 
 
 # -------------------------
-# NEW: Ingest posted notification
+# Get user's notifications (with state)
+# -------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_user_notifications(request):
+    """
+    Returns all notifications for the user with their interaction state.
+    Ordered by most recent first.
+    """
+    # Get user notification states with related data
+    states = UserNotificationState.objects.filter(
+        user=request.user
+    ).select_related(
+        'notification_event',
+        'notification_event__app'
+    ).order_by('-notification_event__post_time')
+    
+    serializer = UserNotificationStateSerializer(states, many=True)
+    return Response(serializer.data)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def upload_notification(request):
+    """
+    Legacy endpoint - creates notification event and user state.
+    Consider migrating clients to use ingest_notification instead.
+    """
+    serializer = IngestNotificationSerializer(data=request.data)
+    if serializer.is_valid():
+        v = serializer.validated_data
+        
+        # Get or create app
+        app = _get_or_create_app(
+            request.user,
+            v["package_name"],
+            v.get("app_label", "")
+        )
+        
+        # Create notification event
+        notif_event = NotificationEvent.objects.create(
+            app=app,
+            notif_key=v.get("notif_key", f"legacy_{timezone.now().timestamp()}"),
+            title=v.get("title", ""),
+            text=v.get("text", ""),
+            post_time=v.get("posted_at", timezone.now())
+        )
+        
+        # Create user state
+        UserNotificationState.objects.create(
+            user=request.user,
+            notification_event=notif_event
+        )
+        
+        return Response({"status": "success"}, status=status.HTTP_201_CREATED)
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# -------------------------
+# Ingest posted notification
 # -------------------------
 
 @api_view(["POST"])
@@ -70,55 +114,66 @@ def _get_or_create_app(user, package_name, app_label=""):
 def ingest_notification(request):
     """
     Android → Server
+    Creates immutable NotificationEvent and UserNotificationState.
+    
+    Payload:
     {
         "package_name": "com.whatsapp",
         "app_label": "WhatsApp",
         "notif_key": "0|com.whatsapp|12345",
         "posted_at": "2025-11-12T12:34:56Z",
         "title": "New message",
-        "text": "Hey!"
+        "text": "Hey!",
+        "big_text": "...",
+        "channel_id": "messages"
     }
     """
     s = IngestNotificationSerializer(data=request.data)
     s.is_valid(raise_exception=True)
     v = s.validated_data
 
+    # Get or create app
     app = _get_or_create_app(
         request.user,
         v["package_name"],
         v.get("app_label", "")
     )
 
-    # dedupe using notif_key
+    # Dedupe using (app, notif_key)
     notif_key = v.get("notif_key")
+    
+    if not notif_key:
+        # Generate unique key if not provided
+        notif_key = f"auto_{app.id}_{timezone.now().timestamp()}"
 
-    if notif_key:
-        notif, created = Notifications.objects.get_or_create(
+    # Try to get existing notification event
+    notif_event, created = NotificationEvent.objects.get_or_create(
+        app=app,
+        notif_key=notif_key,
+        defaults={
+            "post_time": v.get("posted_at", timezone.now()),
+            "title": v.get("title", ""),
+            "text": v.get("text", ""),
+            "big_text": v.get("big_text", ""),
+            "sub_text": v.get("sub_text", ""),
+            "channel_id": v.get("channel_id", ""),
+        }
+    )
+
+    if created:
+        # Create user state for new notification
+        UserNotificationState.objects.create(
             user=request.user,
-            notif_key=notif_key,
-            defaults=dict(
-                package_name=v["package_name"],
-                post_time=v.get("posted_at", timezone.now()),
-                title=v.get("title", ""),
-                text=v.get("text", ""),
-            ),
+            notification_event=notif_event
         )
-        # If already exists, we WON’T overwrite it — but you can if you want
+        return Response({"ok": True, "created": True}, status=status.HTTP_201_CREATED)
     else:
-        notif = Notifications.objects.create(
-            user=request.user,
-            package_name=v["package_name"],
-            notif_key=None,
-            post_time=v.get("posted_at", timezone.now()),
-            title=v.get("title", ""),
-            text=v.get("text", "")
-        )
-
-    return Response({"ok": True}, status=status.HTTP_201_CREATED)
+        # Notification already exists
+        return Response({"ok": True, "created": False}, status=status.HTTP_200_OK)
 
 
 # -------------------------
-# NEW: Ingest interaction (click/swipe)
+# Ingest interaction (click/swipe)
 # -------------------------
 
 @api_view(["POST"])
@@ -126,72 +181,149 @@ def ingest_notification(request):
 def ingest_interaction(request):
     """
     Android → Server
+    Logs interaction event and updates UserNotificationState.
+    
+    Payload:
     {
         "package_name": "com.whatsapp",
         "app_label": "WhatsApp",
         "notif_key": "0|com.whatsapp|12345",
         "removed_at": "2025-11-12T12:35:10Z",
         "raw_reason": 2,
-        "interaction_type": "CLICK"   or  "SWIPE"
+        "interaction_type": "CLICK"  # or "SWIPE"
     }
     """
     s = IngestInteractionSerializer(data=request.data)
     s.is_valid(raise_exception=True)
     v = s.validated_data
 
+    # Get or create app
     app = _get_or_create_app(
         request.user,
         v["package_name"],
         v.get("app_label", "")
     )
 
+    # Find the notification event
+    notif_key = v.get("notif_key")
+    if not notif_key:
+        return Response(
+            {"error": "notif_key is required for interaction tracking"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        notif_event = NotificationEvent.objects.get(
+            app=app,
+            notif_key=notif_key
+        )
+    except NotificationEvent.DoesNotExist:
+        return Response(
+            {"error": "Notification not found. Ensure notification was ingested first."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    # Create interaction event (append-only)
     InteractionEvent.objects.create(
         user=request.user,
-        app=app,
-        notif_key=v.get("notif_key"),
-        removed_at=v["removed_at"],
-        raw_reason=v.get("raw_reason"),
+        notification_event=notif_event,
         interaction_type=v["interaction_type"],
+        timestamp=v["removed_at"],
+        raw_reason=v.get("raw_reason"),
     )
 
-    # Optionally update original notification timestamps
-    notif_key = v.get("notif_key")
-    if notif_key:
-        nr = Notifications.objects.filter(
-            user=request.user, notif_key=notif_key
-        ).first()
+    # Update user notification state
+    state, created = UserNotificationState.objects.get_or_create(
+        user=request.user,
+        notification_event=notif_event
+    )
 
-        if nr:
-            if v["interaction_type"] == InteractionEvent.CLICK:
-                nr.timestamp_opened = v["removed_at"]
-                nr.save(update_fields=["timestamp_opened"])
-
-            elif v["interaction_type"] == InteractionEvent.SWIPE:
-                nr.timestamp_dismissed = v["removed_at"]
-                nr.save(update_fields=["timestamp_dismissed"])
+    if v["interaction_type"] == InteractionEvent.CLICK:
+        if not state.opened_at:  # Only set if not already opened
+            state.mark_opened(timestamp=v["removed_at"])
+    
+    elif v["interaction_type"] == InteractionEvent.SWIPE:
+        if not state.dismissed_at:  # Only set if not already dismissed
+            state.mark_dismissed(timestamp=v["removed_at"])
 
     return Response({"ok": True}, status=status.HTTP_201_CREATED)
 
 
 # -------------------------
-# NEW: List user's apps
+# Mark notification as opened
+# -------------------------
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mark_notification_opened(request, notification_id):
+    """
+    Mark a specific notification as opened.
+    URL: POST /notifications/{notification_id}/mark_opened/
+    """
+    try:
+        state = UserNotificationState.objects.get(
+            user=request.user,
+            notification_event_id=notification_id
+        )
+        state.mark_opened()
+        return Response({"status": "opened", "opened_at": state.opened_at})
+    except UserNotificationState.DoesNotExist:
+        return Response(
+            {"error": "Notification not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+# -------------------------
+# Mark notification as dismissed
+# -------------------------
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def mark_notification_dismissed(request, notification_id):
+    """
+    Mark a specific notification as dismissed.
+    URL: POST /notifications/{notification_id}/mark_dismissed/
+    """
+    try:
+        state = UserNotificationState.objects.get(
+            user=request.user,
+            notification_event_id=notification_id
+        )
+        state.mark_dismissed()
+        return Response({"status": "dismissed", "dismissed_at": state.dismissed_at})
+    except UserNotificationState.DoesNotExist:
+        return Response(
+            {"error": "Notification not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+# -------------------------
+# List user's apps
 # -------------------------
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def apps_list(request):
+    """
+    Returns all apps that have sent notifications to this user.
+    """
     apps = App.objects.filter(user=request.user).order_by("app_label")
     serializer = AppSerializer(apps, many=True)
     return Response(serializer.data)
 
 
 # -------------------------
-# NEW: Stats for TODAY
+# Stats for TODAY
 # -------------------------
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def stats_today(request):
+    """
+    Returns aggregated stats for today, per app.
+    """
     today = timezone.now().date()
 
     qs = DailyAggregate.objects.filter(
@@ -204,12 +336,16 @@ def stats_today(request):
 
 
 # -------------------------
-# NEW: Stats for range (default 7 days)
+# Stats for date range
 # -------------------------
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def stats_range(request):
+    """
+    Returns aggregated stats for the past N days (default 7).
+    Query param: ?days=7
+    """
     days = int(request.GET.get("days", 7))
     start = timezone.now().date() - timedelta(days=days - 1)
 
@@ -230,9 +366,56 @@ def stats_range(request):
 
     return Response(list(qs))
 
+
+# -------------------------
+# Delete notification (soft delete approach)
+# -------------------------
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def delete_notification(request):
-    nid = request.data.get("notification_id")
-    Notifications.objects.filter(id=nid, user=request.user).delete()
-    return Response({"ok": True})
+    """
+    Deletes a notification event and its associated state.
+    Note: This is a hard delete. Consider soft delete in production.
+    
+    Payload: {"notification_id": 123}
+    """
+    notification_id = request.data.get("notification_id")
+    
+    if not notification_id:
+        return Response(
+            {"error": "notification_id is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    # Delete user state (will cascade delete if needed)
+    deleted_count, _ = UserNotificationState.objects.filter(
+        user=request.user,
+        notification_event_id=notification_id
+    ).delete()
+    
+    if deleted_count > 0:
+        return Response({"ok": True, "deleted": True})
+    else:
+        return Response(
+            {"error": "Notification not found"},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+
+# -------------------------
+# Get unread notifications count
+# -------------------------
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def unread_count(request):
+    """
+    Returns count of unread notifications.
+    """
+    count = UserNotificationState.objects.filter(
+        user=request.user,
+        is_read=False
+    ).count()
+    
+    return Response({"unread_count": count})
