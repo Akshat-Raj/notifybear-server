@@ -11,28 +11,80 @@ from .views import (
     stats_today,
     stats_range,
     delete_notification,
+    mark_notification_opened,
+    mark_notification_dismissed,
+    unread_count,
 )
 
 urlpatterns = [
+    # -------------------------
     # Existing routes
-    path("get/",permission_classes([IsAuthenticated])(get_user_notifications),name="get_user_notifications"),
-    path("upload/",permission_classes([IsAuthenticated])(upload_notification),name="upload_notification"),
+    # -------------------------
+    path(
+        "get/",
+        permission_classes([IsAuthenticated])(get_user_notifications),
+        name="get_user_notifications"
+    ),
+    path(
+        "upload/",
+        permission_classes([IsAuthenticated])(upload_notification),
+        name="upload_notification"
+    ),
 
-    # New: ingest posted notifications from Android
-    path("ingest/notification/",permission_classes([IsAuthenticated])(ingest_notification),name="ingest_notification"),
+    # -------------------------
+    # Ingest endpoints (from Android client)
+    # -------------------------
+    path(
+        "ingest/notification/",
+        permission_classes([IsAuthenticated])(ingest_notification),
+        name="ingest_notification"
+    ),
+    path(
+        "ingest/interaction/",
+        permission_classes([IsAuthenticated])(ingest_interaction),
+        name="ingest_interaction"
+    ),
 
-    # New: ingest interactions (CLICK / SWIPE)
-    path("ingest/interaction/",permission_classes([IsAuthenticated])(ingest_interaction),name="ingest_interaction"),
+    # -------------------------
+    # Notification state management
+    # -------------------------
+    path(
+        "<int:notification_id>/mark_opened/",
+        permission_classes([IsAuthenticated])(mark_notification_opened),
+        name="mark_notification_opened"
+    ),
+    path(
+        "<int:notification_id>/mark_dismissed/",
+        permission_classes([IsAuthenticated])(mark_notification_dismissed),
+        name="mark_notification_dismissed"
+    ),
+    path(
+        "delete/",
+        permission_classes([IsAuthenticated])(delete_notification),
+        name="delete_notification"
+    ),
 
-    # New: List apps a user has notifications from
-    path("apps/",permission_classes([IsAuthenticated])(apps_list),name="apps_list"),
-
-    # New: Stats for today
-    path("stats/today/",permission_classes([IsAuthenticated])(stats_today),name="stats_today"),
-
-    # New: Stats for last X days (default 7)
-    path("stats/range/",permission_classes([IsAuthenticated])(stats_range),name="stats_range"),
-    
-    # New: Delete a notification
-    path("delete/",permission_classes([IsAuthenticated])(delete_notification),name="delete_notification"),
+    # -------------------------
+    # App & Statistics endpoints
+    # -------------------------
+    path(
+        "apps/",
+        permission_classes([IsAuthenticated])(apps_list),
+        name="apps_list"
+    ),
+    path(
+        "stats/today/",
+        permission_classes([IsAuthenticated])(stats_today),
+        name="stats_today"
+    ),
+    path(
+        "stats/range/",
+        permission_classes([IsAuthenticated])(stats_range),
+        name="stats_range"
+    ),
+    path(
+        "unread/count/",
+        permission_classes([IsAuthenticated])(unread_count),
+        name="unread_count"
+    ),
 ]
