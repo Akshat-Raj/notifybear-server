@@ -6,8 +6,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
-from sklearn.utils.class_weight import compute_class_weight
 import pandas as pd
+from skl2onnx import convert_sklearn
+from skl2onnx.common.data_types import StringTensorType, Int64TensorType, FloatTensorType
+import onnx
 
 
 class UserNotificationModel:
@@ -49,3 +51,15 @@ class UserNotificationModel:
 
     def load(self, path):
         self.pipeline = joblib.load(path)
+    
+    def save_onnx(self, path="model.onnx"):
+        initial_types = [
+            ("app", StringTensorType([None, 1])),
+            ("hour", Int64TensorType([None, 1])),
+            ("has_urgent", Int64TensorType([None, 1])),
+            ("has_promo", Int64TensorType([None, 1])),
+        ]
+
+        onnx_model = convert_sklearn(self.pipeline, initial_types=initial_types)
+        with open(path, "wb") as f:
+            f.write(onnx_model.SerializeToString())
