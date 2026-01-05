@@ -100,7 +100,7 @@ def retrain_model_for_user(user, apps, total=1000):
 
     #path = f"models/user_{user.id}.joblib"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".joblib")
-    model.save(tmp.name)
+    model.save_onnx(tmp.name)
     tmp.close()
 
     return tmp.name

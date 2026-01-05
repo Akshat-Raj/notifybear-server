@@ -16,7 +16,7 @@ def train_for_user(user_id, apps, total=1000):
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".joblib")
     #path = f"models/user_{user_id}.joblib"
-    model.save(tmp.name)
+    model.save_onnx(tmp.name)
     tmp.close()
 
     return tmp.name
