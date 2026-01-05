@@ -7,6 +7,7 @@ from sklearn.preprocessing import OneHotEncoder
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.utils.class_weight import compute_class_weight
+import pandas as pd
 
 
 class UserNotificationModel:
@@ -14,8 +15,10 @@ class UserNotificationModel:
         self.pipeline = None
 
     def train(self, dataset):
-        X = [x for x, y in dataset]
+        X_dict = [x for x, y in dataset]
         y = [y for x, y in dataset]
+
+        X = pd.DataFrame(X_dict)
 
         cat_features = ["app"]
         num_features = ["hour", "has_urgent", "has_promo"]
@@ -24,19 +27,11 @@ class UserNotificationModel:
             ("cat", OneHotEncoder(handle_unknown="ignore"), cat_features),
             ("num", "passthrough", num_features),
         ])
-        
-        classes = np.unique(y)
-        weights = compute_class_weight(
-            class_weight="balanced",
-            classes=classes,
-            y=y
-        )
-        class_weight = dict(zip(classes, weights))
 
         clf = LogisticRegression(
             max_iter=500,
             multi_class="auto",
-            class_weight=class_weight
+            class_weight="balanced",
         )
 
         self.pipeline = Pipeline([
