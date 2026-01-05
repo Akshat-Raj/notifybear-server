@@ -32,6 +32,7 @@ class NotificationEventSerializer(serializers.ModelSerializer):
     package_name = serializers.CharField(source='app.package_name', read_only=True)
     app_label = serializers.CharField(source='app.app_label', read_only=True)
     app_id = serializers.IntegerField(source='app.id', read_only=True)
+    content_hash = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     
     class Meta:
         model = NotificationEvent
@@ -112,6 +113,10 @@ class UserNotificationStateSerializer(serializers.ModelSerializer):
             return rt.total_seconds()
         return None
 
+class UserNotificationStateUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserNotificationState
+        fields = ["id", "ml_score"]
 
 # -------------------------
 # Compact UserNotificationState Serializer (for lists)
