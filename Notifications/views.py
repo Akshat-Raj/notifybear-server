@@ -432,9 +432,9 @@ def unread_count(request):
 def update_notification_state(request):
     state_id = request.data.get("state_id")
     try:
-        ml_score = int(request.data.get("ml_score"))
+        ml_score = float(request.data.get("ml_score"))
     except (TypeError, ValueError):
-        return Response({"error": "ml_score must be integer"}, status=400)
+        return Response({"error": "ml_score must be float"}, status=400)
 
 
     if state_id is None or ml_score is None:
