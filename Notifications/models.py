@@ -157,7 +157,8 @@ class UserNotificationState(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name="notification_states"
+        related_name="notification_states",
+        db_index=True
     )
     notification_event = models.ForeignKey(
         NotificationEvent,
