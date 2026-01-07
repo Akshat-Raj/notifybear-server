@@ -82,5 +82,9 @@ urlpatterns = [
         permission_classes([IsAuthenticated])(unread_count),
         name="unread_count"
     ),
-    path("update_state/", update_notification_state),
+    path(
+        "update_state/",
+        permission_classes([IsAuthenticated])(update_notification_state),
+        name="update_notification_state"
+    ),
 ]
