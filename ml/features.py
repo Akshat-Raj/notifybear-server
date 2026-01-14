@@ -1,8 +1,3 @@
-"""
-Feature extraction for notification ranking.
-Extracts features from notifications while avoiding performance bottlenecks.
-"""
-
 import logging
 import re
 from datetime import timedelta
@@ -14,15 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 class FeatureExtractor:
-    """
-    Centralized feature extraction for notifications.
-    
-    Key improvements:
-    - User history is cached (no DB calls per prediction)
-    - Features are consistent between training and inference
-    - All features are numerical or categorical (ML-ready)
-    """
-    
     # Keyword lists for text analysis
     URGENT_WORDS = [
         "otp", "urgent", "verify", "code", "important", 
@@ -84,20 +70,9 @@ class FeatureExtractor:
     
     @classmethod
     def extract(cls, notification, user, user_stats=None):
-        """
-        Extract all features for a notification.
-        
-        Args:
-            notification: NotificationEvent instance
-            user: User instance
-            user_stats: Optional pre-computed user statistics (for performance)
-        
-        Returns:
-            dict: Feature dictionary ready for ML model
-        """
         # Get user stats (cached or computed)
         if user_stats is None:
-            user_stats = cls.get_cached_user_stats(user, notification.app)
+            user_stats = cls.get_cached_user_stats(user, notification.app, cutoff=notification.post_time)
         
         # Combine all text fields
         text = cls._combine_text(notification)
@@ -173,18 +148,7 @@ class FeatureExtractor:
         return features
     
     @classmethod
-    def get_cached_user_stats(cls, user, app=None, cache_duration=3600):
-        """
-        Get user statistics with caching to avoid DB hits.
-        
-        Args:
-            user: User instance
-            app: Optional App instance (for app-specific stats)
-            cache_duration: Cache TTL in seconds (default 1 hour)
-        
-        Returns:
-            dict: User statistics
-        """
+    def get_cached_user_stats(cls, user, app=None, cutoff=None, cache_duration=3600):
         # Build cache key
         cache_key = f"user_stats_{user.id}"
         if app:
@@ -198,7 +162,7 @@ class FeatureExtractor:
         
         # Cache miss, compute stats
         logger.debug(f"Cache MISS for {cache_key}, computing...")
-        stats = cls._compute_user_stats(user, app)
+        stats = cls._compute_user_stats(user, app, cutoff)
         
         # Cache for 1 hour
         cache.set(cache_key, stats, cache_duration)
@@ -206,7 +170,7 @@ class FeatureExtractor:
         return stats
     
     @classmethod
-    def _compute_user_stats(cls, user, app=None):
+    def _compute_user_stats(cls, user, app=None, before_time=None):
         """
         Compute user behavioral statistics from database.
         
@@ -221,9 +185,9 @@ class FeatureExtractor:
         if app:
             app_states = UserNotificationState.objects.filter(
                 user=user,
-                notification_event__app=app
+                notification_event__app=app,
+                notification_event__post_time__lt=before_time if before_time else timezone.now()
             )
-            
             total_app_notifs = app_states.count()
             opened_app_notifs = app_states.filter(opened_at__isnull=False).count()
             app_open_rate = opened_app_notifs / total_app_notifs if total_app_notifs > 0 else 0.5
@@ -244,7 +208,10 @@ class FeatureExtractor:
             avg_reaction = 300.0
         
         # === Global user stats ===
-        all_states = UserNotificationState.objects.filter(user=user)
+        all_states = UserNotificationState.objects.filter(
+            user=user,
+            notification_event__post_time__lt=before_time if before_time else timezone.now()
+        )
         total_notifs = all_states.count()
         opened_notifs = all_states.filter(opened_at__isnull=False).count()
         global_open_rate = opened_notifs / total_notifs if total_notifs > 0 else 0.5
@@ -252,6 +219,7 @@ class FeatureExtractor:
         # === Today's activity ===
         notifications_today = NotificationEvent.objects.filter(
             app__user=user,
+            post_time__lt=before_time if before_time else timezone.now(),
             post_time__date=today
         ).count()
         
@@ -282,13 +250,6 @@ class FeatureExtractor:
     
     @classmethod
     def invalidate_user_cache(cls, user, app=None):
-        """
-        Invalidate cached user stats (call when user interacts with notification).
-        
-        Args:
-            user: User instance
-            app: Optional App instance
-        """
         cache_key = f"user_stats_{user.id}"
         cache.delete(cache_key)
         
@@ -300,11 +261,6 @@ class FeatureExtractor:
     
     @classmethod
     def precompute_all_user_stats(cls, users=None):
-        """
-        Precompute and cache stats for all users (run periodically).
-        
-        This is useful to run as a background job to keep cache warm.
-        """
         from django.contrib.auth import get_user_model
         
         if users is None:
@@ -324,7 +280,6 @@ class FeatureExtractor:
     
     @staticmethod
     def _combine_text(notification):
-        """Combine all text fields from notification."""
         parts = [
             notification.title or "",
             notification.text or "",
@@ -335,7 +290,6 @@ class FeatureExtractor:
     
     @staticmethod
     def _calculate_uppercase_ratio(text):
-        """Calculate ratio of uppercase letters (spam signal)."""
         if not text:
             return 0.0
         
@@ -349,16 +303,6 @@ class FeatureExtractor:
     
     @classmethod
     def batch_extract(cls, notifications, user):
-        """
-        Extract features for multiple notifications efficiently.
-        
-        Args:
-            notifications: List of NotificationEvent instances
-            user: User instance
-        
-        Returns:
-            list of feature dicts
-        """
         # Compute user stats once for all notifications
         user_stats = cls.get_cached_user_stats(user)
         

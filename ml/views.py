@@ -3,7 +3,7 @@ from django.http import FileResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from ml.retrain import retrain_model_for_user
-from ml.train_model import train_for_user
+from ml.service import MLService
 
 @api_view(["POST"])
 def train_model_for_user(request):
@@ -13,7 +13,10 @@ def train_model_for_user(request):
     if not apps:
         return Response({"error": "No apps sent"}, status=400)
 
-    path = train_for_user(user.id, apps)
+    success = MLService.retrain_global_model()
+    if not success:
+        return Response({"error": "Training failed"}, status=500)
+    return Response({"status": "retrained"})
     if not os.path.exists(path):
         return Response({"error": "Model training failed"}, status=500)
 

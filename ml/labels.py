@@ -1,8 +1,3 @@
-"""
-Observed-based labeling system.
-Labels are derived ONLY from actual user behavior, not engineered rules.
-"""
-
 import logging
 from django.utils import timezone
 
@@ -10,14 +5,6 @@ logger = logging.getLogger(__name__)
 
 
 class ObservedLabeler:
-    """
-    Generate labels based ONLY on observed user behavior.
-    
-    This replaces the rule-based NotificationLabeler.
-    Key principle: Let users teach the model what's important,
-    don't impose our assumptions.
-    """
-    
     @staticmethod
     def label_from_behavior(notification, user):
         """

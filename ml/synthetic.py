@@ -1,13 +1,3 @@
-"""
-Synthetic data generation for cold start.
-
-Key changes from original:
-- Much smaller dataset (200 samples, not 1000)
-- Weak, uncertain labels (expresses that we're guessing)
-- Only used when real data is insufficient
-- Phased out as real data accumulates
-"""
-
 import random
 import logging
 
@@ -301,7 +291,7 @@ class SyntheticDataGenerator:
                 (len(text) > 200 and ('http' in text_lower or 'www.' in text_lower))
             ),
             "is_high_priority_app": int(FeatureExtractor.APP_PRIORITY.get(app, 0.5) > 0.7),
-            "is_notification_burst": int(random.randint(0, 5) > 5),
+            "is_notification_burst": int(random.randint(0, 10) > 7),
             "is_rare_notification": int(random.uniform(300, 3600) > 7200),
         }
         
@@ -324,7 +314,7 @@ class SyntheticDataGenerator:
         
         # OTP/Verification (most confident prediction)
         if features.get("is_likely_otp", 0):
-            base_score = 0.75  # Likely high engagement (not 1.0, we're not certain!)
+            base_score = 0.7  # Likely high engagement (not 1.0, we're not certain!)
         
         # Promotional (confident it's low priority)
         elif features.get("is_likely_promo", 0):
@@ -344,7 +334,7 @@ class SyntheticDataGenerator:
         
         # Add significant noise to express UNCERTAINTY
         # This is key: synthetic labels should be fuzzy
-        noise = random.gauss(0, 0.15)  # ±15% uncertainty (high!)
+        noise = random.gauss(0, 0.25)  # ±25% uncertainty (high!)
         score = base_score + noise
         
         # Clip to valid range

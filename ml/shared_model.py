@@ -14,6 +14,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.core.cache import cache
+from django.utils import timezone
 
 from Notifications.models import NotificationEvent
 from ml.model import UserNotificationModel, ModelEvaluator
@@ -162,12 +163,12 @@ class SharedNotificationModel:
         notifications = NotificationEvent.objects.filter(
             app__user=user
         ).select_related('app').prefetch_related('user_states').order_by('-post_time')[:max_samples * 2]
-        
+        labels = ObservedLabeler.batch_label(notifications, user)
         for notif in notifications:
-            if ObservedLabeler.can_be_labeled(notif, user):
+            if notif.id in labels:
                 try:
                     features = FeatureExtractor.extract(notif, user)
-                    engagement_score = ObservedLabeler.label_from_behavior(notif, user)
+                    engagement_score = labels.get(notif.id)
                     
                     if engagement_score is not None:
                         user_data.append((features, engagement_score))
@@ -362,6 +363,12 @@ def invalidate_global_model_cache():
     """
     Invalidate cached global model (call after retraining).
     """
+    from ml.features import FeatureExtractor
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    for user in User.objects.all():
+        FeatureExtractor.invalidate_user_cache(user)
     global _global_model_instance
     _global_model_instance = None
     cache.delete('global_notification_model')

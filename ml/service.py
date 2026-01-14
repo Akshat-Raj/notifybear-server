@@ -8,9 +8,11 @@ Key changes:
 - Clean API for views to use
 """
 
+from itertools import count
 import logging
 from django.core.cache import cache
 from django.utils import timezone
+from django.db.models import Q
 
 from Notifications.models import NotificationEvent, UserNotificationState
 from ml.shared_model import get_global_model, train_and_save_global_model, FallbackPredictor
@@ -382,7 +384,7 @@ class MLMonitor:
         User = get_user_model()
         
         eligible_users = User.objects.annotate(
-            labeled_count=Count(
+            labeled_count=count(
                 'notification_states',
                 filter=Q(notification_states__opened_at__isnull=False) | 
                        Q(notification_states__dismissed_at__isnull=False)
