@@ -9,7 +9,6 @@ Key innovation:
 """
 
 import os
-import logging
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
@@ -22,7 +21,6 @@ from ml.labels import ObservedLabeler
 from ml.features import FeatureExtractor
 from ml.synthetic import SyntheticDataGenerator
 
-logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
@@ -48,20 +46,6 @@ class SharedNotificationModel:
         self.training_stats = {}
     
     def train_global_model(self, min_users=5, samples_per_user=100, model_type='gbm'):
-        """
-        Train ONE model on data from ALL users.
-        
-        Args:
-            min_users: Minimum users needed to train
-            samples_per_user: Max samples to take from each user
-            model_type: 'ridge' or 'gbm'
-        
-        Returns:
-            bool: Success
-        """
-        logger.info("=" * 60)
-        logger.info("TRAINING GLOBAL MODEL")
-        logger.info("=" * 60)
         
         # Find users with sufficient labeled data
         eligible_users = User.objects.annotate(
@@ -75,11 +59,7 @@ class SharedNotificationModel:
         user_count = eligible_users.count()
         
         if user_count < min_users:
-            logger.warning(f"Not enough users to train global model: {user_count} < {min_users}")
             return False
-        
-        logger.info(f"Found {user_count} eligible users for training")
-        
         # Collect data from all users
         all_data = []
         user_contributions = {}
@@ -90,13 +70,10 @@ class SharedNotificationModel:
             if user_data:
                 all_data.extend(user_data)
                 user_contributions[user.id] = len(user_data)
-                logger.info(f"User {user.id}: contributed {len(user_data)} samples")
         
         if len(all_data) < 100:
-            logger.warning(f"Insufficient total data: {len(all_data)} < 100")
             return False
         
-        logger.info(f"Collected {len(all_data)} total samples from {len(user_contributions)} users")
         
         # Analyze data quality
         self._analyze_training_data(all_data)
@@ -108,13 +85,9 @@ class SharedNotificationModel:
         # Decide model type based on data size
         if len(all_data) < 500:
             model_type = 'ridge'
-            logger.info("Using Ridge (data size < 500)")
-        else:
-            logger.info(f"Using {model_type.upper()}")
         
         # Train model
         try:
-            logger.info("Training model...")
             self.global_model = UserNotificationModel(model_type=model_type)
             metrics = self.global_model.train(all_data, validate=True)
             
@@ -130,20 +103,8 @@ class SharedNotificationModel:
                 "model_type": model_type,
                 "trained_at": self.last_trained.isoformat(),
             }
-            
-            logger.info("=" * 60)
-            logger.info("GLOBAL MODEL TRAINING COMPLETE")
-            logger.info(f"  Users: {len(user_contributions)}")
-            logger.info(f"  Samples: {len(all_data)}")
-            logger.info(f"  Val RMSE: {metrics.get('val_rmse', 'N/A')}")
-            logger.info(f"  Val MAE: {metrics.get('val_mae', 'N/A')}")
-            logger.info(f"  Rank Corr: {metrics.get('rank_correlation', 'N/A')}")
-            logger.info("=" * 60)
-            
             return True
-        
         except Exception as e:
-            logger.error(f"Global model training failed: {e}", exc_info=True)
             return False
     
     def _collect_user_data(self, user, max_samples=100):
@@ -178,8 +139,7 @@ class SharedNotificationModel:
                             break
                 
                 except Exception as e:
-                    logger.error(f"Failed to extract data from notification {notif.id}: {e}")
-        
+                    pass
         return user_data
     
     def _analyze_training_data(self, dataset):
@@ -187,25 +147,14 @@ class SharedNotificationModel:
         Analyze training data quality (for logging).
         """
         import numpy as np
+        high = [(x,y) for x,y in dataset if y > 0.7]
+        low = [(x,y) for x,y in dataset if y < 0.3]
+        mid = [(x,y) for x,y in dataset if 0.3 <= y <= 0.7]
+
+        dataset = high + low + mid[:len(high)]
         
         labels = np.array([label for _, label in dataset])
-        
-        logger.info("Training Data Analysis:")
-        logger.info(f"  Label mean: {labels.mean():.3f}")
-        logger.info(f"  Label std: {labels.std():.3f}")
-        logger.info(f"  Label range: [{labels.min():.3f}, {labels.max():.3f}]")
-        logger.info(f"  High engagement (>=0.7): {(labels >= 0.7).mean():.1%}")
-        logger.info(f"  Low engagement (<0.4): {(labels < 0.4).mean():.1%}")
-        
-        # Check for label quality issues
-        if labels.std() < 0.1:
-            logger.warning("Very low label variance - all engagement scores are similar!")
-        
-        if (labels >= 0.7).mean() > 0.8:
-            logger.warning("Most labels are high engagement - possible data bias")
-        
-        if (labels < 0.3).mean() > 0.8:
-            logger.warning("Most labels are low engagement - users may be disengaged")
+        labels = np.clip(labels, 0.05, 0.95)
     
     def predict(self, features):
         """
@@ -218,13 +167,11 @@ class SharedNotificationModel:
             float: 0.0-1.0 engagement score
         """
         if not self.is_trained or self.global_model is None:
-            logger.warning("Global model not trained, returning default score")
             return 0.5
         
         try:
             return self.global_model.predict(features)
         except Exception as e:
-            logger.error(f"Global model prediction failed: {e}")
             return 0.5
     
     def predict_batch(self, features_list):
@@ -238,13 +185,11 @@ class SharedNotificationModel:
             list: Engagement scores
         """
         if not self.is_trained or self.global_model is None:
-            logger.warning("Global model not trained, returning default scores")
             return [0.5] * len(features_list)
         
         try:
             return self.global_model.predict_batch(features_list)
         except Exception as e:
-            logger.error(f"Global model batch prediction failed: {e}")
             return [0.5] * len(features_list)
     
     def save(self, path):
@@ -265,8 +210,6 @@ class SharedNotificationModel:
         metadata_path = path.replace('.joblib', '_metadata.json')
         with open(metadata_path, 'w') as f:
             json.dump(self.training_stats, f, indent=2)
-        
-        logger.info(f"Global model saved to {path}")
     
     def load(self, path):
         """
@@ -289,9 +232,7 @@ class SharedNotificationModel:
             if 'trained_at' in self.training_stats:
                 from django.utils.dateparse import parse_datetime
                 self.last_trained = parse_datetime(self.training_stats['trained_at'])
-        
-        logger.info(f"Global model loaded from {path}")
-    
+            
     def get_info(self):
         """
         Get model information.
@@ -337,7 +278,6 @@ def get_global_model():
         # Check cache first
         cached_model = cache.get('global_notification_model')
         if cached_model:
-            logger.info("Loaded global model from cache")
             _global_model_instance = cached_model
             return _global_model_instance
         
@@ -349,13 +289,11 @@ def get_global_model():
         if os.path.exists(model_path):
             try:
                 _global_model_instance.load(model_path)
-                logger.info("Loaded global model from disk")
                 
                 # Cache for 1 hour
                 cache.set('global_notification_model', _global_model_instance, 3600)
             except Exception as e:
-                logger.error(f"Failed to load global model from disk: {e}")
-    
+                pass
     return _global_model_instance
 
 
@@ -372,7 +310,6 @@ def invalidate_global_model_cache():
     global _global_model_instance
     _global_model_instance = None
     cache.delete('global_notification_model')
-    logger.info("Global model cache invalidated")
 
 
 def train_and_save_global_model(min_users=5, samples_per_user=100):
@@ -403,25 +340,44 @@ def train_and_save_global_model(min_users=5, samples_per_user=100):
         # Invalidate cache so next request loads new model
         invalidate_global_model_cache()
         
-        logger.info("Global model trained and saved successfully")
         return True
     else:
-        logger.error("Global model training failed")
         return False
 
 
 class FallbackPredictor:
-    """
-    Simple rule-based predictor when global model not available.
-    """
-    
     @staticmethod
     def predict(features):
-        """
-        Simple heuristic prediction.
-        
-        Returns:
-            float: 0.0-1.0 engagement estimate
-        """
-        from ml.labels import FallbackLabeler
-        return FallbackLabeler.estimate_importance(features)
+        score = 0.5 
+
+        if features.get("is_likely_otp"):
+            score += 0.25
+
+        if features.get("is_high_priority_app"):
+            score += 0.15
+
+        if features.get("has_person"):
+            score += 0.1
+
+        if features.get("has_question"):
+            score += 0.05
+
+        if features.get("is_likely_promo"):
+            score -= 0.2
+
+        score += 0.2 * (features.get("app_open_rate", 0.5) - 0.5)
+        score += 0.1 * (features.get("user_global_open_rate", 0.5) - 0.5)
+
+        if features.get("is_notification_burst"):
+            score -= 0.1
+
+        if features.get("is_rare_notification"):
+            score += 0.05
+
+        if features.get("is_sleep_hours"):
+            score -= 0.15
+
+        if features.get("is_work_hours") and features.get("is_high_priority_app"):
+            score += 0.1
+
+        return float(max(0.0, min(1.0, score)))

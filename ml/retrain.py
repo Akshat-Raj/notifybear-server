@@ -9,7 +9,6 @@ Key changes:
 """
 
 import random
-import logging
 from django.db.models import Count, Q
 from django.utils import timezone
 
@@ -18,9 +17,6 @@ from ml.labels import ObservedLabeler
 from ml.features import FeatureExtractor
 from ml.synthetic import SyntheticDataGenerator
 from ml.model import UserNotificationModel
-
-logger = logging.getLogger(__name__)
-
 
 class ModelRetrainer:
     """
@@ -40,6 +36,12 @@ class ModelRetrainer:
         Returns:
             tuple: (should_retrain: bool, reason: str)
         """
+        profile = user.profile
+
+        if profile.last_model_retrain:
+            age_days = (timezone.now() - profile.last_model_retrain).days
+            if age_days > 3:
+                return True, f"Model older than {age_days} days"
         # Count labeled interactions (where user actually did something)
         labeled_count = UserNotificationState.objects.filter(
             Q(user=user) & (Q(opened_at__isnull=False) | Q(dismissed_at__isnull=False))
@@ -80,7 +82,6 @@ class ModelRetrainer:
         Returns:
             list of (features, engagement_score) tuples, or None if insufficient data
         """
-        logger.info(f"Building dataset for user {user.id}")
         
         # Get user's apps
         user_apps = list(
@@ -90,7 +91,6 @@ class ModelRetrainer:
         )
         
         if not user_apps:
-            logger.warning(f"User {user.id} has no notifications")
             return None
         
         # === Extract LABELED real data ===
@@ -112,35 +112,24 @@ class ModelRetrainer:
                         real_data.append((features, engagement_score))
                 
                 except Exception as e:
-                    logger.error(f"Failed to extract features for notification {notif.id}: {e}")
                     continue
         
-        logger.info(f"Extracted {len(real_data)} labeled real samples for user {user.id}")
         
         # Analyze real data quality
         if real_data:
             real_labels = [label for _, label in real_data]
             import numpy as np
             label_array = np.array(real_labels)
-            logger.info(f"Real data label distribution: mean={label_array.mean():.3f}, std={label_array.std():.3f}")
-            
-            if label_array.std() < 0.1:
-                logger.warning(f"Low label variance for user {user.id} - user behavior is very consistent")
         
         # === Decide on mixing strategy ===
         
-        if len(real_data) >= ModelRetrainer.THRESHOLD_PURE_REAL:
-            # Strategy 1: Pure real data (BEST CASE)
-            logger.info(f"Using PURE REAL data for user {user.id} ({len(real_data)} samples)")
-            
+        if len(real_data) >= ModelRetrainer.THRESHOLD_PURE_REAL:            
             random.shuffle(real_data)
             dataset = real_data[:target_size]
             
             return dataset
         
         elif len(real_data) >= ModelRetrainer.THRESHOLD_MIXED:
-            # Strategy 2: Real data (2x weight) + minimal synthetic
-            logger.info(f"Using MIXED data for user {user.id} ({len(real_data)} real samples)")
             
             # Weight real data 2x by duplicating
             weighted_real = real_data * 2
@@ -160,15 +149,10 @@ class ModelRetrainer:
             dataset = weighted_real + synthetic
             random.shuffle(dataset)
             
-            logger.info(f"Mixed dataset: {len(real_data)} real (2x weight = {len(weighted_real)}) + {len(synthetic)} synthetic")
             
             return dataset[:target_size]
         
         elif len(real_data) >= ModelRetrainer.THRESHOLD_COLD_START:
-            # Strategy 3: Real data + moderate synthetic (COLD START)
-            logger.info(f"Using COLD START mix for user {user.id} ({len(real_data)} real samples)")
-            
-            # Calculate how much synthetic we need
             synthetic_needed = max(200, target_size - len(real_data))
             
             synthetic = SyntheticDataGenerator.generate_for_cold_start(
@@ -178,14 +162,9 @@ class ModelRetrainer:
             
             dataset = real_data + synthetic
             random.shuffle(dataset)
-            
-            logger.info(f"Cold start dataset: {len(real_data)} real + {len(synthetic)} synthetic")
-            
             return dataset[:target_size]
         
         else:
-            # Too little data to train
-            logger.warning(f"Insufficient data for user {user.id} ({len(real_data)} samples, need {ModelRetrainer.THRESHOLD_COLD_START}+)")
             return None
     
     @staticmethod
@@ -202,38 +181,30 @@ class ModelRetrainer:
         Returns:
             tuple: (model, metrics) or (None, None) if training fails
         """
-        logger.info(f"Training model for user {user.id}")
         
         # Build dataset
         dataset = ModelRetrainer.build_dataset(user, target_size=target_size)
         
         if dataset is None or len(dataset) == 0:
-            logger.error(f"Cannot train model for user {user.id}: insufficient data")
             return None, None
         
         # Analyze dataset composition
         real_count = sum(1 for features, label in dataset 
                         if features.get('app_open_rate', 0.5) != 0.5)  # Heuristic: real data has non-default stats
         synthetic_count = len(dataset) - real_count
-        
-        logger.info(f"Training on {len(dataset)} samples (~{real_count} real, ~{synthetic_count} synthetic)")
-        
         # Choose model type based on data size
         if len(dataset) < 200:
             model_type = 'ridge'  # Force ridge for small datasets
-            logger.info("Using Ridge (dataset too small for GBM)")
         
-        # Train model
         try:
             model = UserNotificationModel(model_type=model_type)
             metrics = model.train(dataset, validate=validate)
-            
-            logger.info(f"Model trained for user {user.id}: {metrics}")
-            
+            profile = user.profile
+            profile.last_model_retrain = timezone.now()
+            profile.save(update_fields=["last_model_retrain"])           
             return model, metrics
         
         except Exception as e:
-            logger.error(f"Training failed for user {user.id}: {e}", exc_info=True)
             return None, None
     
     @staticmethod
@@ -268,17 +239,14 @@ class ModelRetrainer:
                     if true_label is not None:
                         test_data.append((features, true_label))
                 except Exception as e:
-                    logger.error(f"Evaluation failed for notification {notif.id}: {e}")
+                    pass
         
         if not test_data:
             return {"error": "No test data available"}
         
         # Evaluate
         from ml.model import ModelEvaluator
-        metrics = ModelEvaluator.evaluate(model, test_data)
-        
-        logger.info(f"Recent data evaluation for user {user.id}: {metrics}")
-        
+        metrics = ModelEvaluator.evaluate(model, test_data)        
         return metrics
     
     @staticmethod

@@ -10,7 +10,9 @@ Key changes:
 import joblib
 import numpy as np
 import pandas as pd
-import logging
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -19,171 +21,64 @@ from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-logger = logging.getLogger(__name__)
-
-
 class UserNotificationModel:
-    """
-    Regression model for predicting notification engagement.
-    
-    Predicts: float 0.0-1.0 (engagement score)
-    Higher score = user more likely to engage quickly
-    """
-    
-    def __init__(self, model_type='ridge'):
-        """
-        Initialize model.
-        
-        Args:
-            model_type: 'ridge' (fast, simple) or 'gbm' (better, slower)
-        """
-        self.pipeline = None
-        self.feature_names = None
-        self.model_type = model_type
-        self.train_rmse = None
-        self.val_rmse = None
-        self.val_mae = None
-    
-    def train(self, dataset, validate=True):
-        """
-        Train regression model on engagement data.
-        
-        Args:
-            dataset: List of (features_dict, engagement_score) tuples
-                     engagement_score is float 0.0-1.0
-            validate: Whether to perform train/val split
-        
-        Returns:
-            dict: Training metrics
-        """
-        if not dataset:
-            raise ValueError("Empty dataset")
-        
-        # Unpack dataset
-        X_dict = [x for x, y in dataset]
-        y = np.array([y for x, y in dataset], dtype=float)
-        X = pd.DataFrame(X_dict)
-        
-        # Store feature names
-        self.feature_names = list(X.columns)
-        
-        logger.info(f"Training {self.model_type} model on {len(X)} samples")
-        logger.info(f"Features: {len(self.feature_names)}")
-        logger.info(f"Engagement distribution: mean={y.mean():.3f}, std={y.std():.3f}, min={y.min():.3f}, max={y.max():.3f}")
-        
-        # Check for label quality
-        if y.std() < 0.05:
-            logger.warning("Very low label variance - all labels are similar!")
-        
-        # Define feature types
-        cat_features = ["app", "channel_id"]
-        num_features = [f for f in X.columns if f not in cat_features]
-        
-        logger.info(f"Categorical features: {len(cat_features)}")
-        logger.info(f"Numerical features: {len(num_features)}")
-        
-        # Build preprocessor
-        preprocessor = ColumnTransformer(
-            transformers=[
-                ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_features),
-                ("num", StandardScaler(), num_features),
-            ],
-            remainder='drop'
-        )
-        
-        # Choose regressor
-        if self.model_type == 'ridge':
-            regressor = Ridge(
-                alpha=1.0,
-                random_state=42,
-                max_iter=1000
-            )
-        elif self.model_type == 'gbm':
-            regressor = GradientBoostingRegressor(
-                n_estimators=100,
-                max_depth=4,
-                learning_rate=0.1,
-                min_samples_split=10,
-                min_samples_leaf=5,
-                subsample=0.8,
-                random_state=42,
-                verbose=0
-            )
-        else:
-            raise ValueError(f"Unknown model type: {self.model_type}")
-        
-        # Create pipeline
-        self.pipeline = Pipeline([
-            ("prep", preprocessor),
-            ("reg", regressor),
-        ])
-        
-        # Train with validation split
-        if validate and len(X) >= 100:
-            logger.info("Training with validation split")
-            
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y, 
-                test_size=0.2, 
+    def __init__(self, model_type="gbm"):
+        if model_type == "gbm":
+            self.model = HistGradientBoostingRegressor(
+                max_depth=6,
+                learning_rate=0.05,
+                max_iter=200,
                 random_state=42
             )
-            
-            # Train
-            self.pipeline.fit(X_train, y_train)
-            
-            # Predictions
-            train_pred = self.pipeline.predict(X_train)
-            val_pred = self.pipeline.predict(X_val)
-            
-            # Clip predictions to valid range
-            train_pred = np.clip(train_pred, 0.0, 1.0)
-            val_pred = np.clip(val_pred, 0.0, 1.0)
-            
-            # Calculate metrics
-            self.train_rmse = np.sqrt(mean_squared_error(y_train, train_pred))
-            self.val_rmse = np.sqrt(mean_squared_error(y_val, val_pred))
-            self.val_mae = mean_absolute_error(y_val, val_pred)
-            
-            # Ranking metric: Spearman correlation
-            from scipy.stats import spearmanr
-            rank_corr, _ = spearmanr(y_val, val_pred)
-            
-            logger.info(f"Train RMSE: {self.train_rmse:.4f}")
-            logger.info(f"Val RMSE: {self.val_rmse:.4f}")
-            logger.info(f"Val MAE: {self.val_mae:.4f}")
-            logger.info(f"Val Rank Correlation: {rank_corr:.4f}")
-            
-            # Check for overfitting
-            if self.train_rmse < self.val_rmse * 0.7:
-                logger.warning("Possible overfitting detected (train RMSE much lower than val RMSE)")
-            
-            return {
-                "train_rmse": float(self.train_rmse),
-                "val_rmse": float(self.val_rmse),
-                "val_mae": float(self.val_mae),
-                "rank_correlation": float(rank_corr),
-                "train_size": len(X_train),
-                "val_size": len(X_val),
-            }
-        
         else:
-            # Train on full dataset (no validation)
-            logger.info("Training on full dataset (no validation split)")
-            
-            self.pipeline.fit(X, y)
-            
-            # Calculate train metrics only
-            train_pred = self.pipeline.predict(X)
-            train_pred = np.clip(train_pred, 0.0, 1.0)
-            
-            self.train_rmse = np.sqrt(mean_squared_error(y, train_pred))
-            
-            logger.info(f"Train RMSE: {self.train_rmse:.4f}")
-            
-            return {
-                "train_rmse": float(self.train_rmse),
-                "train_size": len(X),
+            self.model = Ridge(alpha=1.0)
+    
+    def train(self, dataset, validate=True, test_size=0.2, random_state=42):
+        if not dataset or len(dataset) < 20:
+            raise ValueError("Not enough data to train model")
+
+        X, y = zip(*dataset)
+        X = np.array(X, dtype=np.float32)
+        y = np.array(y, dtype=np.float32)
+
+        # Clip labels for numerical stability
+        y = np.clip(y, 0.05, 0.95)
+
+        if validate:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=test_size, random_state=random_state
+            )
+        else:
+            X_train, y_train = X, y
+            X_val = y_val = None
+
+        self.model.fit(X_train, y_train)
+
+        metrics = {}
+
+        if validate:
+            preds = self.model.predict(X_val)
+
+            mae = mean_absolute_error(y_val, preds)
+            rmse = mean_squared_error(y_val, preds, squared=False)
+
+            # Rank correlation (Spearman)
+            try:
+                from scipy.stats import spearmanr
+                rank_corr = spearmanr(y_val, preds).correlation
+            except Exception:
+                rank_corr = None
+
+            metrics = {
+                "val_mae": float(mae),
+                "val_rmse": float(rmse),
+                "rank_correlation": float(rank_corr) if rank_corr is not None else None,
+                "num_train": len(X_train),
+                "num_val": len(X_val),
             }
+        self.is_trained = True
+
+        return metrics
     
     def predict(self, features):
         """
@@ -217,14 +112,10 @@ class UserNotificationModel:
             score = float(self.pipeline.predict(features_df)[0])
             
             # Clip to valid range
-            score = max(0.0, min(1.0, score))
-            
-            logger.debug(f"Predicted engagement: {score:.3f} for app={features.get('app', 'unknown')}")
-            
+            score = max(0.0, min(1.0, score))            
             return score
         
         except Exception as e:
-            logger.error(f"Prediction failed: {e}", exc_info=True)
             return 0.5  # Default to medium priority on error
     
     def predict_batch(self, features_list):
@@ -260,13 +151,9 @@ class UserNotificationModel:
             
             # Clip to valid range
             scores = np.clip(scores, 0.0, 1.0)
-            
-            logger.debug(f"Batch predicted {len(scores)} notifications")
-            
             return scores
         
         except Exception as e:
-            logger.error(f"Batch prediction failed: {e}", exc_info=True)
             return np.full(len(features_list), 0.5)  # Default array
     
     def predict_priority_bucket(self, features):
@@ -300,7 +187,6 @@ class UserNotificationModel:
             raise ValueError("Model not trained yet")
         
         if self.model_type != 'gbm':
-            logger.warning("Feature importance only available for GBM models")
             return {}
         
         try:
@@ -325,7 +211,6 @@ class UserNotificationModel:
             return importance_dict
         
         except Exception as e:
-            logger.error(f"Failed to get feature importance: {e}")
             return {}
     
     def save(self, path):
@@ -348,7 +233,6 @@ class UserNotificationModel:
         }
         
         joblib.dump(model_data, path, compress=3)
-        logger.info(f"Model saved to {path}")
     
     def load(self, path):
         """
@@ -365,12 +249,6 @@ class UserNotificationModel:
         self.train_rmse = model_data.get('train_rmse')
         self.val_rmse = model_data.get('val_rmse')
         self.val_mae = model_data.get('val_mae')
-        
-        logger.info(f"Model loaded from {path}")
-        logger.info(f"Model type: {self.model_type}")
-        logger.info(f"Features: {len(self.feature_names)}")
-        if self.val_rmse:
-            logger.info(f"Validation RMSE: {self.val_rmse:.4f}")
     
     def summary(self):
         """

@@ -1,42 +1,53 @@
-import os
-from django.http import FileResponse
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from ml.retrain import retrain_model_for_user
-from ml.service import MLService
+from ml.retrain import ModelRetrainer
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def train_model_for_user(request):
     user = request.user
     apps = request.data.get("apps", [])
 
     if not apps:
         return Response({"error": "No apps sent"}, status=400)
+    
+    model, metrics = ModelRetrainer.train_model(user)
 
-    success = MLService.retrain_global_model()
-    if not success:
-        return Response({"error": "Training failed"}, status=500)
-    return Response({"status": "retrained"})
-    if not os.path.exists(path):
-        return Response({"error": "Model training failed"}, status=500)
+    if model is None:
+        return Response({"error": "Not enough data to train"}, status=400)
 
-    response = FileResponse(open(path, "rb"), as_attachment=True, filename="model.joblib")
-    response["X-Delete-File"] = path
-    return response
-
+    return Response({
+        "status": "trained",
+        "metrics": metrics
+    })
 
 @api_view(["POST"])
+@permission_classes([IsAuthenticated])
 def retrain_model(request):
     user = request.user
-    apps = request.data.get("apps", [])
 
-    if not apps:
-        return Response({"error": "apps required"}, status=400)
+    # Step 1 — check if retrain is needed
+    should_train, reason = ModelRetrainer.should_retrain(user)
 
-    path = retrain_model_for_user(user, apps)
-    if not os.path.exists(path):
-        return Response({"error": "Model training failed"}, status=500)
+    if not should_train:
+        return Response({
+            "status": "skipped",
+            "reason": reason
+        }, status=200)
 
-    response = FileResponse(open(path, "rb"), as_attachment=True, filename="model.joblib")
-    response["X-Delete-File"] = path
-    return response
+    # Step 2 — train model
+    model, metrics = ModelRetrainer.train_model(user)
+
+    if model is None:
+        return Response({
+            "status": "failed",
+            "error": "Not enough data or training failed"
+        }, status=400)
+
+    # Step 3 — return success
+    return Response({
+        "status": "retrained",
+        "reason": reason,
+        "metrics": metrics
+    }, status=200)
