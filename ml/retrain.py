@@ -183,8 +183,11 @@ class ModelRetrainer:
         # Build dataset
         dataset = ModelRetrainer.build_dataset(user, apps=apps, target_size=target_size)
         
+        from ml.baseline import get_baseline_model
+
         if dataset is None or len(dataset) == 0:
-            return None, None
+            model = get_baseline_model()
+            return model, {"status": "baseline"}
         
         # Analyze dataset composition
         real_count = sum(1 for features, label in dataset 
