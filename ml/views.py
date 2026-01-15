@@ -7,12 +7,16 @@ from ml.retrain import ModelRetrainer
 @permission_classes([IsAuthenticated])
 def train_model_for_user(request):
     user = request.user
+    
+    if not user or not user.is_authenticated:
+        return Response({"error": "Authentication required"}, status=401)
+    
     apps = request.data.get("apps", [])
 
     if not apps:
         return Response({"error": "No apps sent"}, status=400)
     
-    model, metrics = ModelRetrainer.train_model(user)
+    model, metrics = ModelRetrainer.train_model(user, apps=apps)
 
     if model is None:
         return Response({"error": "Not enough data to train"}, status=400)

@@ -65,7 +65,7 @@ class ModelRetrainer:
         return False, "No retrain needed"
     
     @staticmethod
-    def build_dataset(user, target_size=500):
+    def build_dataset(user, apps=None, target_size=500):
         """
         Build training dataset with smart real/synthetic mixing.
         
@@ -84,12 +84,12 @@ class ModelRetrainer:
         """
         
         # Get user's apps
-        user_apps = list(
-            NotificationEvent.objects.filter(
-                app__user=user
-            ).values_list('app__package_name', flat=True).distinct()
-        )
-        
+        qs = NotificationEvent.objects.filter(app__user=user)
+        if apps:
+            qs = qs.filter(app__package_name__in=apps)
+
+        user_apps = list(qs.values_list('app__package_name', flat=True).distinct())
+                
         if not user_apps:
             return None
         
@@ -97,9 +97,7 @@ class ModelRetrainer:
         real_data = []
         
         # Get notifications with interactions
-        notifications = NotificationEvent.objects.filter(
-            app__user=user
-        ).select_related('app').prefetch_related('user_states').order_by('-post_time')
+        notifications = qs.select_related('app').prefetch_related('user_states').order_by('-post_time')
         
         for notif in notifications:
             # Only use if we can generate a label from behavior
@@ -168,7 +166,7 @@ class ModelRetrainer:
             return None
     
     @staticmethod
-    def train_model(user, model_type='ridge', target_size=500, validate=True):
+    def train_model(user, apps=None, model_type='ridge', target_size=500, validate=True):
         """
         Train a model for a user.
         
@@ -183,7 +181,7 @@ class ModelRetrainer:
         """
         
         # Build dataset
-        dataset = ModelRetrainer.build_dataset(user, target_size=target_size)
+        dataset = ModelRetrainer.build_dataset(user, apps=apps, target_size=target_size)
         
         if dataset is None or len(dataset) == 0:
             return None, None
