@@ -11,7 +11,7 @@ Key changes:
 import random
 from django.db.models import Count, Q
 from django.utils import timezone
-
+import tempfile
 from Notifications.models import NotificationEvent, UserNotificationState
 from ml.labels import ObservedLabeler
 from ml.features import FeatureExtractor
@@ -165,48 +165,64 @@ class ModelRetrainer:
         else:
             return None
     
+    # @staticmethod
+    # def train_model(user, apps=None, model_type='ridge', target_size=500, validate=True):
+    #     """
+    #     Train a model for a user.
+        
+    #     Args:
+    #         user: User instance
+    #         model_type: 'ridge' or 'gbm'
+    #         target_size: Target dataset size
+    #         validate: Whether to perform validation
+        
+    #     Returns:
+    #         tuple: (model, metrics) or (None, None) if training fails
+    #     """
+        
+    #     # Build dataset
+    #     dataset = ModelRetrainer.build_dataset(user, apps=apps, target_size=target_size)
+        
+    #     from ml.baseline import get_baseline_model
+
+    #     if dataset is None or len(dataset) == 0:
+    #         model = get_baseline_model()
+    #         return model, {"status": "baseline"}
+        
+    #     # Analyze dataset composition
+    #     real_count = sum(1 for features, label in dataset 
+    #                     if features.get('app_open_rate', 0.5) != 0.5)  # Heuristic: real data has non-default stats
+    #     synthetic_count = len(dataset) - real_count
+    #     # Choose model type based on data size
+    #     if len(dataset) < 200:
+    #         model_type = 'ridge'  # Force ridge for small datasets
+        
+    #     try:
+    #         model = UserNotificationModel(model_type=model_type)
+    #         metrics = model.train(dataset, validate=validate)
+    #         profile = user.profile
+    #         profile.last_model_retrain = timezone.now()
+    #         profile.save(update_fields=["last_model_retrain"])           
+    #         return model, metrics
+        
+    #     except Exception as e:
+    #         return None, None
     @staticmethod
     def train_model(user, apps=None, model_type='ridge', target_size=500, validate=True):
-        """
-        Train a model for a user.
-        
-        Args:
-            user: User instance
-            model_type: 'ridge' or 'gbm'
-            target_size: Target dataset size
-            validate: Whether to perform validation
-        
-        Returns:
-            tuple: (model, metrics) or (None, None) if training fails
-        """
-        
-        # Build dataset
         dataset = ModelRetrainer.build_dataset(user, apps=apps, target_size=target_size)
-        
-        from ml.baseline import get_baseline_model
-
-        if dataset is None or len(dataset) == 0:
-            model = get_baseline_model()
-            return model, {"status": "baseline"}
-        
-        # Analyze dataset composition
-        real_count = sum(1 for features, label in dataset 
-                        if features.get('app_open_rate', 0.5) != 0.5)  # Heuristic: real data has non-default stats
-        synthetic_count = len(dataset) - real_count
-        # Choose model type based on data size
-        if len(dataset) < 200:
-            model_type = 'ridge'  # Force ridge for small datasets
-        
-        try:
-            model = UserNotificationModel(model_type=model_type)
-            metrics = model.train(dataset, validate=validate)
-            profile = user.profile
-            profile.last_model_retrain = timezone.now()
-            profile.save(update_fields=["last_model_retrain"])           
-            return model, metrics
-        
-        except Exception as e:
+        if not dataset:
             return None, None
+
+        model = UserNotificationModel(model_type=model_type)
+        metrics = model.train(dataset, validate=validate)
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".onnx")
+        model.save_onnx(tmp.name, feature_count=len(dataset[0][0]))
+
+        user.profile.last_model_retrain = timezone.now()
+        user.profile.save(update_fields=["last_model_retrain"])
+
+        return metrics, tmp.name
     
     @staticmethod
     def evaluate_on_recent_data(model, user, n_recent=50):
