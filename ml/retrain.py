@@ -213,11 +213,16 @@ class ModelRetrainer:
         if not dataset:
             return None, None
 
+        cleaned_dataset = []
+        for feature_dict, label in dataset:
+            feature_vector = FeatureExtractor.to_vector(feature_dict)
+            cleaned_dataset.append((feature_vector, label))
+        
         model = UserNotificationModel(model_type=model_type)
-        metrics = model.train(dataset, validate=validate)
+        metrics = model.train(cleaned_dataset, validate=validate)
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".onnx")
-        model.save_onnx(tmp.name, feature_count=len(dataset[0][0]))
+        model.save_onnx(tmp.name, feature_count=len(cleaned_dataset[0][0]))
 
         user.profile.last_model_retrain = timezone.now()
         user.profile.save(update_fields=["last_model_retrain"])
