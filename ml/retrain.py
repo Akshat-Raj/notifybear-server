@@ -18,6 +18,51 @@ from ml.features import FeatureExtractor
 from ml.synthetic import SyntheticDataGenerator
 from ml.model import UserNotificationModel
 
+CANONICAL_FEATURE_ORDER = [
+        # ---- Temporal ----
+        "hour",
+        "day_of_week",
+        "is_weekend",
+        "is_work_hours",
+        "is_sleep_hours",
+        "is_morning",
+        "is_afternoon",
+        "is_evening",
+
+        # ---- Text ----
+        "text_length",
+        "title_length",
+        "has_urgent",
+        "has_promo",
+        "has_person",
+        "has_question",
+        "has_numbers",
+        "has_url",
+        "is_short",
+        "is_long",
+        "word_count",
+        "uppercase_ratio",
+
+        # ---- App ----
+        "app_priority",
+
+        # ---- User stats ----
+        "app_open_rate",
+        "app_avg_reaction_time",
+        "user_global_open_rate",
+        "notifications_today",
+        "notifications_this_hour",
+        "time_since_last_notif",
+        "is_first_of_day",
+
+        # ---- Derived ----
+        "is_likely_otp",
+        "is_likely_promo",
+        "is_high_priority_app",
+        "is_notification_burst",
+        "is_rare_notification"
+    ]
+
 class ModelRetrainer:
     """
     Handles intelligent model retraining for users.
@@ -63,150 +108,177 @@ class ModelRetrainer:
             return True, f"Periodic retrain: {labeled_count} interactions"
         
         return False, "No retrain needed"
-    
     @staticmethod
     def build_dataset(user, apps=None, target_size=500):
         """
-        Build training dataset with smart real/synthetic mixing.
-        
-        Strategy:
-        - >= 100 labeled: Pure real data (no synthetic)
-        - 50-99 labeled: Real data (2x weight) + minimal synthetic
-        - 20-49 labeled: Real data + moderate synthetic
-        - < 20 labeled: Don't train yet (return None)
-        
-        Args:
-            user: User instance
-            target_size: Target dataset size (default 500)
-        
-        Returns:
-            list of (features, engagement_score) tuples, or None if insufficient data
+        Always return a dataset of exactly `target_size`.
+
+        - Use real labeled data when available.
+        - If real data is insufficient, fill with synthetic data.
+        - If ZERO real data exists, train on purely synthetic data.
         """
-        
+
         # Get user's apps
         qs = NotificationEvent.objects.filter(app__user=user)
         if apps:
             qs = qs.filter(app__package_name__in=apps)
 
-        user_apps = list(qs.values_list('app__package_name', flat=True).distinct())
-                
+        user_apps = list(
+            qs.values_list('app__package_name', flat=True).distinct()
+        )
+
+        # If user has NO apps in DB, still create a synthetic dataset
         if not user_apps:
-            return None
-        
+            return SyntheticDataGenerator.generate_for_cold_start(
+                apps=apps or ["unknown"],
+                n=target_size
+            )
+
         # === Extract LABELED real data ===
         real_data = []
-        
-        # Get notifications with interactions
-        notifications = qs.select_related('app').prefetch_related('user_states').order_by('-post_time')
-        
+
+        notifications = qs.select_related('app') \
+            .prefetch_related('user_states') \
+            .order_by('-post_time')
+
         for notif in notifications:
-            # Only use if we can generate a label from behavior
             if ObservedLabeler.can_be_labeled(notif, user):
                 try:
                     features = FeatureExtractor.extract(notif, user)
                     engagement_score = ObservedLabeler.label_from_behavior(notif, user)
-                    
+
                     if engagement_score is not None:
-                        real_data.append((features, engagement_score))
-                
-                except Exception as e:
+                        vec = FeatureExtractor.to_vector(features)
+                        real_data.append((vec, engagement_score))
+
+                except Exception:
                     continue
-        
-        
-        # Analyze real data quality
-        if real_data:
-            real_labels = [label for _, label in real_data]
-            import numpy as np
-            label_array = np.array(real_labels)
-        
-        # === Decide on mixing strategy ===
-        
-        if len(real_data) >= ModelRetrainer.THRESHOLD_PURE_REAL:            
+
+        # ---- CASE 1: Plenty of real data ----
+        if len(real_data) >= target_size:
             random.shuffle(real_data)
-            dataset = real_data[:target_size]
-            
-            return dataset
-        
-        elif len(real_data) >= ModelRetrainer.THRESHOLD_MIXED:
-            
-            # Weight real data 2x by duplicating
-            weighted_real = real_data * 2
-            
-            # Add minimal synthetic to reach target
-            synthetic_needed = max(0, target_size - len(weighted_real))
-            synthetic_needed = min(synthetic_needed, 100)  # Cap at 100 synthetic
-            
-            if synthetic_needed > 0:
-                synthetic = SyntheticDataGenerator.generate_for_cold_start(
-                    apps=user_apps,
-                    n=synthetic_needed
-                )
-            else:
-                synthetic = []
-            
-            dataset = weighted_real + synthetic
-            random.shuffle(dataset)
-            
-            
-            return dataset[:target_size]
-        
-        elif len(real_data) >= ModelRetrainer.THRESHOLD_COLD_START:
-            synthetic_needed = max(200, target_size - len(real_data))
-            
+            return real_data[:target_size]
+
+        # ---- CASE 2: Some real data, but less than target ----
+        if 0 < len(real_data) < target_size:
+            needed = target_size - len(real_data)
+
             synthetic = SyntheticDataGenerator.generate_for_cold_start(
                 apps=user_apps,
-                n=synthetic_needed
+                n=needed
             )
-            
+
             dataset = real_data + synthetic
             random.shuffle(dataset)
-            return dataset[:target_size]
-        
-        else:
-            return None
-    
+            return dataset
+
+        # ---- CASE 3: ZERO real data ----
+        # Purely synthetic warm start
+        return SyntheticDataGenerator.generate_for_cold_start(
+            apps=user_apps,
+            n=target_size
+        )
     # @staticmethod
-    # def train_model(user, apps=None, model_type='ridge', target_size=500, validate=True):
+    # def build_dataset(user, apps=None, target_size=500):
     #     """
-    #     Train a model for a user.
+    #     Build training dataset with smart real/synthetic mixing.
+        
+    #     Strategy:
+    #     - >= 100 labeled: Pure real data (no synthetic)
+    #     - 50-99 labeled: Real data (2x weight) + minimal synthetic
+    #     - 20-49 labeled: Real data + moderate synthetic
+    #     - < 20 labeled: Don't train yet (return None)
         
     #     Args:
     #         user: User instance
-    #         model_type: 'ridge' or 'gbm'
-    #         target_size: Target dataset size
-    #         validate: Whether to perform validation
+    #         target_size: Target dataset size (default 500)
         
     #     Returns:
-    #         tuple: (model, metrics) or (None, None) if training fails
+    #         list of (features, engagement_score) tuples, or None if insufficient data
     #     """
         
-    #     # Build dataset
-    #     dataset = ModelRetrainer.build_dataset(user, apps=apps, target_size=target_size)
-        
-    #     from ml.baseline import get_baseline_model
+    #     # Get user's apps
+    #     qs = NotificationEvent.objects.filter(app__user=user)
+    #     if apps:
+    #         qs = qs.filter(app__package_name__in=apps)
 
-    #     if dataset is None or len(dataset) == 0:
-    #         model = get_baseline_model()
-    #         return model, {"status": "baseline"}
+    #     user_apps = list(qs.values_list('app__package_name', flat=True).distinct())
+                
+    #     if not user_apps:
+    #         return None
         
-    #     # Analyze dataset composition
-    #     real_count = sum(1 for features, label in dataset 
-    #                     if features.get('app_open_rate', 0.5) != 0.5)  # Heuristic: real data has non-default stats
-    #     synthetic_count = len(dataset) - real_count
-    #     # Choose model type based on data size
-    #     if len(dataset) < 200:
-    #         model_type = 'ridge'  # Force ridge for small datasets
+    #     # === Extract LABELED real data ===
+    #     real_data = []
         
-    #     try:
-    #         model = UserNotificationModel(model_type=model_type)
-    #         metrics = model.train(dataset, validate=validate)
-    #         profile = user.profile
-    #         profile.last_model_retrain = timezone.now()
-    #         profile.save(update_fields=["last_model_retrain"])           
-    #         return model, metrics
+    #     # Get notifications with interactions
+    #     notifications = qs.select_related('app').prefetch_related('user_states').order_by('-post_time')
         
-    #     except Exception as e:
-    #         return None, None
+    #     for notif in notifications:
+    #         # Only use if we can generate a label from behavior
+    #         if ObservedLabeler.can_be_labeled(notif, user):
+    #             try:
+    #                 features = FeatureExtractor.extract(notif, user)
+    #                 engagement_score = ObservedLabeler.label_from_behavior(notif, user)
+                    
+    #                 if engagement_score is not None:
+    #                     real_data.append((features, engagement_score))
+                
+    #             except Exception as e:
+    #                 continue
+        
+        
+    #     # Analyze real data quality
+    #     if real_data:
+    #         real_labels = [label for _, label in real_data]
+    #         import numpy as np
+    #         label_array = np.array(real_labels)
+        
+    #     # === Decide on mixing strategy ===
+        
+    #     if len(real_data) >= ModelRetrainer.THRESHOLD_PURE_REAL:            
+    #         random.shuffle(real_data)
+    #         dataset = real_data[:target_size]
+            
+    #         return dataset
+        
+    #     elif len(real_data) >= ModelRetrainer.THRESHOLD_MIXED:
+            
+    #         # Weight real data 2x by duplicating
+    #         weighted_real = real_data * 2
+            
+    #         # Add minimal synthetic to reach target
+    #         synthetic_needed = max(0, target_size - len(weighted_real))
+    #         synthetic_needed = min(synthetic_needed, 100)  # Cap at 100 synthetic
+            
+    #         if synthetic_needed > 0:
+    #             synthetic = SyntheticDataGenerator.generate_for_cold_start(
+    #                 apps=user_apps,
+    #                 n=synthetic_needed
+    #             )
+    #         else:
+    #             synthetic = []
+            
+    #         dataset = weighted_real + synthetic
+    #         random.shuffle(dataset)
+            
+            
+    #         return dataset[:target_size]
+        
+    #     elif len(real_data) >= ModelRetrainer.THRESHOLD_COLD_START:
+    #         synthetic_needed = max(200, target_size - len(real_data))
+            
+    #         synthetic = SyntheticDataGenerator.generate_for_cold_start(
+    #             apps=user_apps,
+    #             n=synthetic_needed
+    #         )
+            
+    #         dataset = real_data + synthetic
+    #         random.shuffle(dataset)
+    #         return dataset[:target_size]
+        
+    #     else:
+    #         return None
+    
     @staticmethod
     def train_model(user, apps=None, model_type='ridge', target_size=500, validate=True):
         dataset = ModelRetrainer.build_dataset(user, apps=apps, target_size=target_size)
@@ -222,7 +294,8 @@ class ModelRetrainer:
         metrics = model.train(cleaned_dataset, validate=validate)
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".onnx")
-        model.save_onnx(tmp.name, feature_count=len(cleaned_dataset[0][0]))
+        feature_dim = len(CANONICAL_FEATURE_ORDER)
+        model.save_onnx(tmp.name, feature_count=feature_dim)
 
         user.profile.last_model_retrain = timezone.now()
         user.profile.save(update_fields=["last_model_retrain"])
