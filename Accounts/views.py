@@ -134,6 +134,7 @@ class CustomTokenRefreshView(TokenRefreshView):
 
 @api_view(["GET"])
 @permission_classes([permissions.IsAuthenticated])
+@throttle_classes([])
 def me(request):
     user = request.user
     serializer = UserSerializer(user)

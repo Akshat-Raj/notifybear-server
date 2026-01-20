@@ -62,9 +62,9 @@ REST_FRAMEWORK = {
         "rest_framework.throttling.AnonRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
-        "user": "1000/day",
-        "anon": "20/hour",
-        "login": "5/minute",
+        "user": "10000/day",
+        "anon": "100/hour",
+        "login": "25/minute",
     }
 }
 from datetime import timedelta
