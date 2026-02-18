@@ -24,7 +24,7 @@ def calculate_analytics(user, notif_type):
     # ========================
     # Ignore rate
     # ========================
-    total = qs.count()
+    total = this_week_count
     ignored = qs.filter(is_read=False).count()
 
     ignore_rate = (ignored / total) if total > 0 else 0.0
