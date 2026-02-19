@@ -157,7 +157,7 @@ class GoogleLoginView(APIView):
             payload = id_token.verify_oauth2_token(
                 token,
                 requests.Request(),
-                settings.GOOGLE_ANDROID_ID
+                settings.GOOGLE_WEB_ID
             )
         except Exception:
             return Response({"error": "Invalid Google token"}, status=400)
