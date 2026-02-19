@@ -139,9 +139,11 @@ class ModelRetrainer:
 
         notifications = qs.select_related('app') \
             .prefetch_related('user_states') \
-            .order_by('-post_time')
+            .order_by('-post_time')[:1000]
 
         for notif in notifications:
+            if len(real_data) >= target_size:
+                break
             if ObservedLabeler.can_be_labeled(notif, user):
                 try:
                     features = FeatureExtractor.extract(notif, user)
