@@ -16,8 +16,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
         fields = ["dp", "dp_url"]
 
     def get_dp_url(self, obj):
-        if obj.dp and hasattr(obj.dp, 'url'):
+        request = self.context.get("request")
+
+        if obj.dp and hasattr(obj.dp, "url"):
+            if request:
+                return request.build_absolute_uri(obj.dp.url)
             return obj.dp.url
+
         return None
 
 

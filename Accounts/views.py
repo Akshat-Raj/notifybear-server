@@ -138,7 +138,7 @@ class CustomTokenRefreshView(TokenRefreshView):
 @throttle_classes([])
 def me(request):
     user = request.user
-    serializer = UserSerializer(user)
+    serializer = UserSerializer(user, context={"request": request})
     return Response(serializer.data)
 
 from google.oauth2 import id_token
