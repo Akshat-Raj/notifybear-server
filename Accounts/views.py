@@ -1,3 +1,5 @@
+import os
+from time import time
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -194,8 +196,19 @@ class UploadProfilePhotoView(APIView):
 
         if "dp" not in request.FILES:
             return Response({"error":"No file"}, status=400)
+        
+        file = request.FILES["dp"]
 
-        profile.dp = request.FILES["dp"]
+        ext = os.path.splitext(file.name)[1]
+        if not ext:
+            ext = ".jpg"
+
+        file.name = f"{request.user.username}_{int(time())}{ext}"
+        
+        if profile.dp:
+            profile.dp.delete(save=False)
+        
+        profile.dp = file
         profile.save()
 
         serializer = UserSerializer(request.user, context={"request":request})
