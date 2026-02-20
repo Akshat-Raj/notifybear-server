@@ -192,7 +192,7 @@ class UploadProfilePhotoView(APIView):
     def post(self, request):
         profile = request.user.profile
 
-        if "photo" not in request.FILES:
+        if "dp" not in request.FILES:
             return Response({"error":"No file"}, status=400)
 
         profile.dp = request.FILES["dp"]
