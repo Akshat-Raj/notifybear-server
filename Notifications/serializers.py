@@ -303,3 +303,7 @@ class NotificationAnalyticsSerializer(serializers.Serializer):
     weeklyActivity = serializers.ListField(
         child=serializers.IntegerField()
     )
+    timeDistribution = serializers.ListField(
+        child=serializers.IntegerField()
+    )
+    insights = serializers.DictField() 
