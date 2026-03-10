@@ -436,3 +436,38 @@ class NotificationAnalyticsView(APIView):
         data = calculate_analytics(request.user, notif_type)
 
         return Response(data)
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def toggle_bookmark(request):
+
+    notif_id = request.data.get("notification_id")
+
+    try:
+        state = UserNotificationState.objects.get(
+            user=request.user,
+            notification_id=notif_id
+        )
+
+        state.is_bookmarked = not state.is_bookmarked
+        state.save()
+
+        return Response({
+            "bookmarked": state.is_bookmarked
+        })
+
+    except UserNotificationState.DoesNotExist:
+        return Response({"error": "not found"}, status=404)
+    
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def bookmarked_notifications(request):
+
+    qs = UserNotificationState.objects.filter(
+        user=request.user,
+        is_bookmarked=True
+    ).select_related("notification", "notification__app")
+
+    serializer = UserNotificationStateSerializer(qs, many=True)
+
+    return Response(serializer.data)

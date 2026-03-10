@@ -15,6 +15,8 @@ from .views import (
     unread_count,
     update_notification_state,
     NotificationAnalyticsView,
+    toggle_bookmark,
+    bookmarked_notifications,
 )
 
 urlpatterns = [
@@ -89,4 +91,6 @@ urlpatterns = [
         name="update_notification_state"
     ),
     path("analytics/", NotificationAnalyticsView.as_view()),
+    path("bookmark/", toggle_bookmark),
+    path("bookmarked/", bookmarked_notifications),
 ]

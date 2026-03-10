@@ -179,6 +179,7 @@ class UserNotificationState(models.Model):
     
     # Derived state (cached for performance)
     is_read = models.BooleanField(default=False, db_index=True)
+    is_bookmarked = models.BooleanField(default=False)
     
     # ML scoring (computed and cached)
     ml_score = models.FloatField(
