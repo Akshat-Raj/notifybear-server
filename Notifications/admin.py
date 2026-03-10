@@ -211,11 +211,12 @@ class UserNotificationStateAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "is_read",
+        "ml_score",
+        "is_bookmarked",
         "user_link",
         "notification_link",
         "opened_at",
         "dismissed_at",
-        "ml_score",
     )
     list_filter = (
         "is_read",
