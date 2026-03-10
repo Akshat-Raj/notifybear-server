@@ -28,7 +28,7 @@ class UserNotificationStateInline(admin.TabularInline):
     """Show user states for a notification event."""
     model = UserNotificationState
     extra = 0
-    fields = ("user", "is_read", "opened_at", "dismissed_at", "ml_score")
+    fields = ("user", "is_read", "is_bookmarked", "opened_at", "dismissed_at", "ml_score")
     readonly_fields = ("user", "opened_at", "dismissed_at")
     can_delete = True
 
