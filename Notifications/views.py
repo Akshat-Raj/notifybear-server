@@ -270,6 +270,9 @@ def mark_notification_dismissed(request, notification_id):
             notification_event_id=notification_id
         )
         state.mark_dismissed()
+        state.dismissed_at = timezone.now()
+        state.is_read = True
+        state.save()
         return Response({"status": "dismissed", "dismissed_at": state.dismissed_at})
     except UserNotificationState.DoesNotExist:
         return Response(
