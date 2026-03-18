@@ -231,11 +231,6 @@ class UserNotificationState(models.Model):
         self.opened_at = timestamp or timezone.now()
         self.is_read = True
         self.save(update_fields=["opened_at", "is_read", "last_updated"])
-    
-    def mark_dismissed(self, timestamp=None):
-        """Mark notification as dismissed."""
-        self.dismissed_at = timestamp or timezone.now()
-        self.save(update_fields=["dismissed_at", "last_updated"])
 
     def mark_dismissed(self, dismissed_by, timestamp=None):
         self.dismissed_at = timestamp or timezone.now()
@@ -244,7 +239,7 @@ class UserNotificationState(models.Model):
         
     @property
     def is_auto_dismissed(self):
-        return self.dismissed_by == self.DismissedBy.NOTIFYBEAR
+        return self.dismissed_by == DismissedBy.NOTIFYBEAR
 
 
 class InteractionEvent(models.Model):

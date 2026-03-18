@@ -154,7 +154,7 @@ def ingest_notification(request):
 # -------------------------
 # Ingest interaction (click/swipe)
 # -------------------------
-
+REASON_CLICK = 1
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def ingest_interaction(request):
@@ -201,29 +201,57 @@ def ingest_interaction(request):
             {"error": "Notification not found. Ensure notification was ingested first."},
             status=status.HTTP_404_NOT_FOUND
         )
-
-    # Create interaction event (append-only)
-    InteractionEvent.objects.create(
-        user=request.user,
-        notification_event=notif_event,
-        interaction_type=v["interaction_type"],
-        timestamp=v["removed_at"],
-        raw_reason=v.get("raw_reason"),
-    )
-
-    # Update user notification state
-    state, created = UserNotificationState.objects.get_or_create(
+        
+    state, _ = UserNotificationState.objects.get_or_create(
         user=request.user,
         notification_event=notif_event
     )
-
-    if v["interaction_type"] == InteractionEvent.CLICK:
-        if not state.opened_at:  # Only set if not already opened
-            state.mark_opened(timestamp=v["removed_at"])
     
-    elif v["interaction_type"] == InteractionEvent.SWIPE:
-        if not state.dismissed_at:  # Only set if not already dismissed
-            state.mark_dismissed(timestamp=v["removed_at"])
+    raw_reason = v.get("raw_reason")
+    dismissed_by = v.get("dismissed_by")
+    timestamp = v["removed_at"]
+
+    # -------------------------
+    # HANDLE CLICK
+    # -------------------------
+    if raw_reason == REASON_CLICK:
+        if not state.opened_at:
+            state.mark_opened(timestamp=timestamp)
+
+        # Log event (optional but useful)
+        InteractionEvent.objects.create(
+            user=request.user,
+            notification_event=notif_event,
+            interaction_type="CLICK",
+            timestamp=timestamp,
+            raw_reason=raw_reason,
+        )
+
+        return Response({"ok": True})
+
+    # -------------------------
+    # HANDLE DISMISS
+    # -------------------------
+    if dismissed_by:
+        if not state.dismissed_at or dismissed_by == "user":
+            state.mark_dismissed(
+                dismissed_by=dismissed_by,
+                timestamp=timestamp
+            )
+
+            # user dismiss = mark read
+            if dismissed_by == "user" and not state.is_read:
+                state.mark_opened(timestamp=timestamp)
+
+        # Log event
+        InteractionEvent.objects.create(
+            user=request.user,
+            notification_event=notif_event,
+            interaction_type="DISMISS",
+            timestamp=timestamp,
+            raw_reason=raw_reason,
+            metadata={"dismissed_by": dismissed_by},
+        )
 
     return Response({"ok": True}, status=status.HTTP_201_CREATED)
 
@@ -270,7 +298,6 @@ def mark_notification_dismissed(request, notification_id):
             notification_event_id=notification_id
         )
         state.mark_dismissed()
-        state.dismissed_at = timezone.now()
         state.is_read = True
         state.save()
         return Response({"status": "dismissed", "dismissed_at": state.dismissed_at})

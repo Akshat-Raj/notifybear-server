@@ -203,8 +203,10 @@ class IngestInteractionSerializer(serializers.Serializer):
     notif_key = serializers.CharField(max_length=256, required=False, allow_blank=True, allow_null=True)
     removed_at = serializers.DateTimeField()
     raw_reason = serializers.IntegerField(required=False, allow_null=True)
-    interaction_type = serializers.ChoiceField(
-        choices=[t[0] for t in InteractionEvent.INTERACTION_TYPES]
+    dismissed_by = serializers.ChoiceField(
+            choices=["user", "app"],
+            required=False,
+            allow_null=True
     )
     metadata = serializers.JSONField(required=False, allow_null=True)
 
